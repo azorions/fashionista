@@ -17,7 +17,7 @@ import { Colors, Spacing } from '@/constants/theme';
 import { oklchToRgb, rgbToHex } from '@/domain/color/oklab';
 import { CATEGORIES, type Category } from '@/domain/tagging/schema';
 import { fetchSubcategories, saveTags } from '@/lib/capturePipeline';
-import type { SubcategoryRow } from '@/lib/garmentRow';
+import type { SubcategoryRow } from '@/domain/garment/row';
 import { useCaptureStore } from '@/stores/captureStore';
 import { useGarment } from '@/features/useCloset';
 
@@ -92,6 +92,8 @@ export default function TagScreen() {
               {swatches.map((s, i) => (
                 <View
                   key={i}
+                  accessible
+                  accessibilityLabel={`Colour ${i + 1}: ${rgbToHex(oklchToRgb(s))}`}
                   style={[styles.swatch, { backgroundColor: rgbToHex(oklchToRgb(s)) }]}
                 />
               ))}
@@ -109,6 +111,9 @@ export default function TagScreen() {
                   setCategory(c);
                   setSubcategory(null);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={c}
+                accessibilityState={{ selected: category === c }}
                 style={[
                   styles.chip,
                   { borderColor: colors.backgroundSelected },
@@ -132,6 +137,9 @@ export default function TagScreen() {
                 <Pressable
                   key={s.code}
                   onPress={() => setSubcategory(s.code)}
+                  accessibilityRole="button"
+                  accessibilityLabel={s.label}
+                  accessibilityState={{ selected: subcategory === s.code }}
                   style={[
                     styles.chip,
                     { borderColor: colors.backgroundSelected },

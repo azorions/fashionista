@@ -34,11 +34,13 @@ interface Props {
   uri: string;
   category: Category;
   dimmed?: boolean;
+  /** Accessible name. Without it a screen reader reads a grid of "image". */
+  label?: string;
   /** Grid tiles use the small thumb; the review screen wants the full tile. */
   priority?: 'low' | 'normal' | 'high';
 }
 
-export function GarmentTile({ uri, category, dimmed, priority = 'normal' }: Props) {
+export function GarmentTile({ uri, category, dimmed, label, priority = 'normal' }: Props) {
   const dark = useColorScheme() === 'dark';
   const scale = CATEGORY_DISPLAY_SCALE[category] ?? 0.9;
 
@@ -62,6 +64,9 @@ export function GarmentTile({ uri, category, dimmed, priority = 'normal' }: Prop
       </View>
 
       <Image
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={label ?? `${category} garment`}
         source={{ uri }}
         style={[styles.garment, { transform: [{ scale }] }, dimmed && styles.dimmed]}
         contentFit="contain"

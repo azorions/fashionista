@@ -68,8 +68,15 @@ export default function ClosetScreen() {
           />
         )}
 
-        <Pressable style={styles.fab} onPress={() => router.push('/capture')}>
-          <ThemedText style={styles.fabLabel}>+</ThemedText>
+        <Pressable
+          style={styles.fab}
+          onPress={() => router.push('/capture')}
+          accessibilityRole="button"
+          accessibilityLabel="Add a garment"
+          accessibilityHint="Opens the camera">
+          <ThemedText style={styles.fabLabel} accessible={false}>
+            +
+          </ThemedText>
         </Pressable>
       </SafeAreaView>
     </ThemedView>
@@ -77,10 +84,11 @@ export default function ClosetScreen() {
 }
 
 function Cell({ item }: { item: ClosetItem }) {
+  const name = item.name ?? item.subcategory.replace(/_/g, ' ');
   return (
     <View style={styles.cell}>
       {item.thumbUrl ? (
-        <GarmentTile uri={item.thumbUrl} category={item.category} priority="low" />
+        <GarmentTile uri={item.thumbUrl} category={item.category} label={name} priority="low" />
       ) : (
         // Cutout still running, or it failed. Either way the garment exists.
         <View style={styles.placeholder}>
@@ -88,7 +96,7 @@ function Cell({ item }: { item: ClosetItem }) {
         </View>
       )}
       <ThemedText type="small" numberOfLines={1} style={styles.caption}>
-        {item.name ?? item.subcategory.replace(/_/g, ' ')}
+        {name}
       </ThemedText>
     </View>
   );

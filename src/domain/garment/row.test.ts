@@ -1,0 +1,211 @@
+import { describe, expect, it } from 'vitest';
+
+import wardrobeSql from '../../../supabase/migrations/0002_wardrobe.sql?raw';
+import { GarmentTagsSchema } from '../tagging/schema';
+import { rowToDefaults, rowToGarment, tagsToRow, type SubcategoryRow, type WardrobeItemRow } from './row';
+
+/**
+ * Field mapping is where things go quietly wrong.
+ *
+ * Nothing at runtime notices a dropped field: TypeScript is happy because the
+ * source object is still assignable, Postgres is happy because the column just
+ * keeps its default, and the bug surfaces months later as "why does the engine
+ * think everything is formality 3". These tests exist because that failure is
+ * silent, not because the code is complicated.
+ */
+
+const fullRow: WardrobeItemRow = {
+  id: 'item-1',
+  user_id: 'user-1',
+  name: 'the good flannel',
+  category: 'top',
+  subcategory: 'flannel',
+  body_zone: 'torso',
+  layer_role: 'base',
+  alt_layer_roles: ['mid', 'outer'],
+  warmth: 3,
+  breathability: 3,
+  bulk: 3,
+  formality: 2,
+  silhouette: 'relaxed',
+  length: 'hip',
+  rise: 'n_a',
+  pattern: 'check',
+  pattern_scale: 'medium',
+  materials: ['cotton'],
+  sheen: 'matte',
+  palette: [{ l: 0.42, c: 0.11, h: 258.4, fraction: 0.8 }],
+  confidence: { warmth: 0.4 },
+  cover_image_id: 'img-1',
+  last_worn_at: null,
+  times_worn: 0,
+  archived: false,
+};
+
+describe('the hand-written row type matches the migration', () => {
+  /**
+   * WardrobeItemRow is hand-written because `npm run db:types` needs a linked
+   * Supabase project that does not exist yet. That makes it the one type in
+   * the codebase nothing verifies — so this test verifies it, in both
+   * directions: TypeScript rejects `fullRow` if a field is missing from it,
+   * and this test fails if a SQL column is missing from the interface.
+   *
+   * Delete this once db:types is generating the real thing.
+   */
+  function sqlColumns(): string[] {
+    const m = wardrobeSql.match(/create table public\.wardrobe_items \(([\s\S]*?)\n\);/);
+    if (!m) throw new Error('could not find the wardrobe_items table');
+    return m[1]
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('--'))
+      .map((l) => l.split(/\s+/)[0])
+      .filter((c) => /^[a-z_]+$/.test(c));
+  }
+
+  it('covers every column the table declares', () => {
+    const declared = sqlColumns();
+    const mapped = Object.keys(fullRow);
+    expect(declared.length).toBeGreaterThan(20); // the parse actually worked
+    for (const col of declared) {
+      if (col === 'created_at' || col === 'updated_at') continue; // never read
+      expect(mapped, `column "${col}" is in SQL but missing from WardrobeItemRow`).toContain(col);
+    }
+  });
+
+  it('invents no columns the table does not have', () => {
+    const declared = new Set(sqlColumns());
+    for (const key of Object.keys(fullRow)) {
+      expect(declared, `"${key}" is on WardrobeItemRow but not in the table`).toContain(key);
+    }
+  });
+});
+
+describe('tagsToRow', () => {
+  const tags = GarmentTagsSchema.parse({
+    category: 'bottom',
+    subcategory: 'low_jeans',
+    bodyZone: 'legs',
+    layerRole: 'bottom',
+    warmth: 3,
+    breathability: 2,
+    bulk: 3,
+    formality: 2,
+    silhouette: 'flared',
+    length: 'full',
+    rise: 'low',
+    materials: ['denim'],
+    name: 'the flares',
+  });
+
+  it('maps every camelCase field to its snake_case column', () => {
+    const row = tagsToRow(tags);
+    expect(row.body_zone).toBe('legs');
+    expect(row.layer_role).toBe('bottom');
+    expect(row.alt_layer_roles).toEqual([]);
+    expect(row.pattern_scale).toBe('none');
+    expect(row.rise).toBe('low');
+  });
+
+  it('drops nothing — every tag field reaches a column', () => {
+    const row = tagsToRow(tags) as Record<string, unknown>;
+    // styleTags lives in its own junction table, so it is the one exception.
+    const expected = Object.keys(tags).filter((k) => k !== 'styleTags');
+    const snake = (s: string) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+    for (const key of expected) {
+      expect(Object.keys(row), `tag field "${key}" never reaches a column`).toContain(snake(key));
+    }
+  });
+
+  it('writes an absent name as null, not undefined', () => {
+    // undefined would make supabase-js omit the key and leave a stale name in
+    // place on an update; null actually clears it.
+    const row = tagsToRow({ ...tags, name: undefined });
+    expect(row.name).toBeNull();
+  });
+});
+
+describe('rowToGarment', () => {
+  it('maps a full row', () => {
+    const g = rowToGarment(fullRow);
+    expect(g.id).toBe('item-1');
+    expect(g.bodyZone).toBe('torso');
+    expect(g.altLayerRoles).toEqual(['mid', 'outer']);
+    expect(g.patternScale).toBe('medium');
+    expect(g.palette).toHaveLength(1);
+    expect(g.confidence?.warmth).toBe(0.4);
+  });
+
+  it('round-trips the tag fields back through tagsToRow unchanged', () => {
+    const g = rowToGarment(fullRow);
+    const back = tagsToRow(g) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(back)) {
+      expect((fullRow as unknown as Record<string, unknown>)[k], `field ${k}`).toEqual(v);
+    }
+  });
+
+  it('produces something the schema accepts', () => {
+    // Guards the seam: a row read back from Postgres must be a valid garment,
+    // or the engine is scoring values the tagger would have rejected.
+    expect(() => GarmentTagsSchema.parse(rowToGarment(fullRow))).not.toThrow();
+  });
+
+  it('survives null arrays from a freshly inserted row', () => {
+    const sparse = {
+      ...fullRow,
+      alt_layer_roles: null,
+      materials: null,
+      palette: null,
+    } as unknown as WardrobeItemRow;
+    const g = rowToGarment(sparse);
+    expect(g.altLayerRoles).toEqual([]);
+    expect(g.materials).toEqual([]);
+    expect(g.palette).toEqual([]);
+  });
+
+  it('leaves styleTags empty — they live in a junction nothing joins yet', () => {
+    expect(rowToGarment(fullRow).styleTags).toEqual([]);
+  });
+});
+
+describe('rowToDefaults', () => {
+  const sub: SubcategoryRow = {
+    code: 'flannel',
+    label: 'Flannel shirt',
+    category: 'top',
+    default_body_zone: 'torso',
+    default_layer_role: 'base',
+    alt_layer_roles: ['mid', 'outer'],
+    default_warmth: 3,
+    default_breathability: 3,
+    default_bulk: 3,
+    default_formality: 2,
+    default_silhouette: 'relaxed',
+    default_length: 'hip',
+    default_rise: 'n_a',
+    sort: 15,
+  };
+
+  it('strips the default_ prefix onto the tag field names', () => {
+    const d = rowToDefaults(sub);
+    expect(d.bodyZone).toBe('torso');
+    expect(d.warmth).toBe(3);
+    expect(d.silhouette).toBe('relaxed');
+    expect(d.altLayerRoles).toEqual(['mid', 'outer']);
+  });
+
+  it('supplies exactly the fields the three-field form does not ask for', () => {
+    const d = rowToDefaults(sub) as Record<string, unknown>;
+    const asked = ['category', 'subcategory', 'name'];
+    const schemaFields = Object.keys(GarmentTagsSchema.shape);
+    const needed = schemaFields.filter((f) => !asked.includes(f) && f !== 'styleTags');
+
+    // Anything in this list but not in the defaults has to be typed by hand on
+    // every single garment, which is how a closet stays empty at four items.
+    const optional = ['pattern', 'patternScale', 'materials', 'sheen'];
+    for (const f of needed) {
+      if (optional.includes(f)) continue;
+      expect(Object.keys(d), `"${f}" has no subcategory default`).toContain(f);
+    }
+  });
+});

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { rowToGarment, type WardrobeItemRow } from '@/lib/garmentRow';
+import { rowToGarment, type WardrobeItemRow } from '@/domain/garment/row';
 import { supabase } from '@/lib/supabase';
 import type { Garment } from '@/domain/styling/types';
 

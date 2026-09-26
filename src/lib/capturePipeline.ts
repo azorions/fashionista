@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { analyzeTile, prepareForUpload } from './imageIo';
-import { rowToDefaults, tagsToRow, type SubcategoryRow } from './garmentRow';
+import { rowToDefaults, tagsToRow, type SubcategoryRow } from '@/domain/garment/row';
 import { applyDefaults, type GarmentForm } from '@/domain/tagging/schema';
 import { scoreMaskQuality } from '@/domain/quality/score';
 import type { QualityVerdict, StillMetrics } from '@/domain/quality/types';

@@ -144,7 +144,10 @@ export default function CaptureScreen() {
           <Pressable
             style={[styles.shutter, busy && styles.dim]}
             onPress={onShutter}
-            disabled={busy}>
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel="Take photo"
+            accessibilityState={{ disabled: busy, busy }}>
             {busy ? <ActivityIndicator color="#111" /> : <View style={styles.shutterInner} />}
           </Pressable>
         </View>

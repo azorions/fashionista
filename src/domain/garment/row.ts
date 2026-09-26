@@ -1,6 +1,6 @@
-import type { Swatch } from '@/domain/color/palette';
-import type { GarmentTags } from '@/domain/tagging/schema';
-import type { Garment } from '@/domain/styling/types';
+import type { Swatch } from '../color/palette';
+import type { GarmentTags } from '../tagging/schema';
+import type { Garment } from '../styling/types';
 
 /**
  * The snake_case / camelCase seam.

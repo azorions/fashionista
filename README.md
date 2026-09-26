@@ -10,11 +10,38 @@ Expo (SDK 57) + Supabase. iOS and Android.
 
 ```bash
 npm install
-cp .env.example .env.local      # then fill in your Supabase project values
-npm start                       # scan the QR code with Expo Go
+npm run check      # typecheck + lint + tests. Works with no Supabase project.
 ```
 
-`npm run check` runs typecheck, lint and tests. Run it before every commit.
+That much runs today. To get the app itself working you need a Supabase
+project, in this order — steps 3 and 5 fail *silently* if you skip them.
+
+1. **Create a project** at supabase.com (one is enough; add a separate prod
+   project when you have data you would be upset to lose).
+2. **Push the schema.**
+   ```bash
+   npx supabase login
+   npx supabase link --project-ref <your-ref>
+   npm run db:diff    # dry run, always first
+   npm run db:push
+   npm run db:types   # writes src/types/database.ts
+   ```
+3. **Switch the email template.** Auth → Email Templates → *Magic Link*, and
+   replace `{{ .ConfirmationURL }}` with `{{ .Token }}`. Without this you get
+   emailed a link when the app is asking for a six-digit code, and sign-in
+   just never completes with no error shown.
+4. **Fill in `.env.local`** from `.env.example` — project URL and the
+   publishable (`sb_publishable_…`) key. Restart the dev server after.
+5. **Set the Edge Function secrets and deploy it.**
+   ```bash
+   npx supabase secrets set REPLICATE_API_TOKEN=...
+   npx supabase functions deploy process-garment
+   ```
+   Without the token, capture uploads fine and then the cutout fails, leaving
+   every tile stuck on a spinner.
+6. `npm start`, scan the QR in Expo Go.
+
+Run `npm run check` before every commit.
 
 ## Two things to do first
 

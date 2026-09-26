@@ -92,6 +92,9 @@ export default function ReviewScreen() {
             <ActivityIndicator />
           </View>
         ) : tileUrl ? (
+          // 'top' is not a placeholder: at review time the item is still the
+          // 'unknown' subcategory, whose seeded category is 'top'. Tagging
+          // happens on the next screen, and the grid renders the real one.
           <GarmentTile uri={tileUrl} category="top" dimmed={score < T.GATE_PASS} />
         ) : (
           <Image source={{ uri: localUri }} style={styles.pendingImage} contentFit="contain" />

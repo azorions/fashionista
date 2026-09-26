@@ -8,6 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useCloset, type ClosetItem } from '@/features/useCloset';
+import { signOut } from '@/lib/auth';
 
 /**
  * The closet.
@@ -26,7 +27,20 @@ export default function ClosetScreen() {
       <SafeAreaView style={styles.fill} edges={['top']}>
         <View style={styles.header}>
           <ThemedText type="title">Closet</ThemedText>
-          {data?.length ? <ThemedText type="small">{data.length} items</ThemedText> : null}
+          <View style={styles.headerRight}>
+            {data?.length ? <ThemedText type="small">{data.length} items</ThemedText> : null}
+            {/*
+              Not polish. Milestone 1 is "done" only once you have signed in as
+              a SECOND account and confirmed you cannot see the first one's
+              garments -- and you cannot run that test on one device without a
+              way out. A Me tab can come later; the test cannot.
+            */}
+            <Pressable onPress={signOut} hitSlop={8}>
+              <ThemedText type="small" style={styles.signOut}>
+                Sign out
+              </ThemedText>
+            </Pressable>
+          </View>
         </View>
 
         {isLoading ? (
@@ -106,6 +120,8 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     justifyContent: 'space-between',
   },
+  headerRight: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.three },
+  signOut: { opacity: 0.6, textDecorationLine: 'underline' },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.two, padding: Spacing.four },
   centred: { textAlign: 'center' },
   spikes: { marginTop: Spacing.three },

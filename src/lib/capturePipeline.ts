@@ -194,7 +194,29 @@ export async function saveTags(itemId: string, form: GarmentForm, sub: Subcatego
   return tags;
 }
 
-/** Nothing is orphaned by a retake: the row and its objects both go. */
+/**
+ * Nothing is orphaned by a retake: the row AND its objects both go.
+ *
+ * The paths have to be collected BEFORE the row is deleted. item_images
+ * cascades away with the item, and a database cascade does not touch storage
+ * -- so deleting the row first loses the only record of what to clean up, and
+ * every retake silently leaks a source.jpg (plus tile and thumb if the cutout
+ * had finished).
+ *
+ * ponytail: client-side because this is the only delete path in M1, and a
+ * Postgres trigger cannot reach the storage API without pg_net plus a service
+ * key. Revisit with a pg_cron orphan sweep if bulk delete arrives in M3.
+ */
 export async function discardCapture(itemId: string) {
+  const { data: images } = await supabase
+    .from('item_images')
+    .select('source_path, tile_path, thumb_path')
+    .eq('item_id', itemId);
+
+  const paths = (images ?? [])
+    .flatMap((i) => [i.source_path, i.tile_path, i.thumb_path])
+    .filter((p): p is string => !!p);
+
+  if (paths.length) await supabase.storage.from(BUCKET).remove(paths);
   await supabase.from('wardrobe_items').delete().eq('id', itemId);
 }

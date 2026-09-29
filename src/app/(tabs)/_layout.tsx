@@ -1,7 +1,17 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
-import { Image, useColorScheme } from 'react-native';
+import type { ComponentProps } from 'react';
+import { useColorScheme, type ColorValue } from 'react-native';
 
 import { Colors } from '@/constants/theme';
+
+type IconName = ComponentProps<typeof Ionicons>['name'];
+
+function icon(on: IconName, off: IconName) {
+  return function TabIcon(p: { color: ColorValue; size: number; focused: boolean }) {
+    return <Ionicons name={p.focused ? on : off} size={p.size} color={p.color as string} />;
+  };
+}
 
 /**
  * JavaScript <Tabs>, deliberately not expo-router's NativeTabs.
@@ -24,27 +34,15 @@ export default function TabsLayout() {
       }}>
       <Tabs.Screen
         name="index"
-        options={{
-          title: 'Closet',
-          tabBarIcon: ({ color, size }) => (
-            <Image
-              source={require('@/assets/images/tabIcons/home.png')}
-              style={{ width: size, height: size, tintColor: color }}
-            />
-          ),
-        }}
+        options={{ title: 'Closet', tabBarIcon: icon('shirt', 'shirt-outline') }}
+      />
+      <Tabs.Screen
+        name="style"
+        options={{ title: 'Style', tabBarIcon: icon('sparkles', 'sparkles-outline') }}
       />
       <Tabs.Screen
         name="outfits"
-        options={{
-          title: 'Outfits',
-          tabBarIcon: ({ color, size }) => (
-            <Image
-              source={require('@/assets/images/tabIcons/explore.png')}
-              style={{ width: size, height: size, tintColor: color }}
-            />
-          ),
-        }}
+        options={{ title: 'Outfits', tabBarIcon: icon('albums', 'albums-outline') }}
       />
     </Tabs>
   );

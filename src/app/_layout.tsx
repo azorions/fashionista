@@ -97,6 +97,7 @@ export default function RootLayout() {
             {/* The spikes group has its own stack and headers; a root header on
                 top of it showed two. */}
             <Stack.Screen name="spikes" options={{ headerShown: false }} />
+            <Stack.Screen name="preview/style" options={{ title: 'Style preview' }} />
           </Stack>
         )}
       </ThemeProvider>

@@ -1,11 +1,12 @@
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { GarmentTile } from '@/components/garment-tile';
+import { Button } from '@/components/ui/button';
 import { Spacing } from '@/constants/theme';
 import { retakeMessage } from '@/domain/quality/score';
 import { discardCapture, markKeptDespiteWarning, runCapture } from '@/lib/capturePipeline';
@@ -134,7 +135,9 @@ export default function ReviewScreen() {
       </View>
 
       {error ? (
-        <ThemedText style={styles.error}>{error}</ThemedText>
+        <ThemedText themeColor="danger" style={styles.centred}>
+          {error}
+        </ThemedText>
       ) : note ? (
         <ThemedText style={styles.note}>{note}</ThemedText>
       ) : working ? (
@@ -144,20 +147,19 @@ export default function ReviewScreen() {
       )}
 
       <View style={styles.actions}>
-        <Pressable
-          style={[styles.secondary, leaving && styles.dim]}
+        <Button
+          label="Retake"
+          variant="secondary"
+          style={styles.action}
           onPress={retake}
           disabled={working || leaving}
-          accessibilityRole="button">
-          <ThemedText>Retake</ThemedText>
-        </Pressable>
-        <Pressable
-          style={[styles.primary, (working || leaving) && styles.dim]}
-          disabled={working || leaving || !!error}
+        />
+        <Button
+          label="Keep"
+          style={styles.action}
           onPress={keep}
-          accessibilityRole="button">
-          <ThemedText style={styles.primaryLabel}>Keep</ThemedText>
-        </Pressable>
+          disabled={working || leaving || !!error}
+        />
       </View>
     </ThemedView>
   );
@@ -179,23 +181,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   note: { textAlign: 'center', opacity: 0.8 },
-  error: { textAlign: 'center', color: '#C62828' },
+  centred: { textAlign: 'center' },
   actions: { flexDirection: 'row', gap: Spacing.three },
-  primary: {
-    flex: 1,
-    backgroundColor: '#111',
-    borderRadius: Spacing.three,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-  },
-  primaryLabel: { color: '#fff', fontWeight: '600' },
-  secondary: {
-    flex: 1,
-    borderRadius: Spacing.three,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(127,127,127,0.4)',
-  },
-  dim: { opacity: 0.5 },
+  action: { flex: 1 },
 });

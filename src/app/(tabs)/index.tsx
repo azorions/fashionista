@@ -6,8 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GarmentTile } from '@/components/garment-tile';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import { useCloset, type ClosetItem } from '@/features/useCloset';
+import { useTheme } from '@/hooks/use-theme';
 import { signOut } from '@/lib/auth';
 
 /**
@@ -20,6 +21,7 @@ import { signOut } from '@/lib/auth';
  */
 export default function ClosetScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const { data, isLoading, error, refetch, isRefetching } = useCloset();
 
   return (
@@ -49,7 +51,7 @@ export default function ClosetScreen() {
           </View>
         ) : error ? (
           <View style={styles.centre}>
-            <ThemedText style={styles.error}>Could not load your closet.</ThemedText>
+            <ThemedText themeColor="danger">Could not load your closet.</ThemedText>
             <Pressable onPress={() => refetch()}>
               <ThemedText type="link">Try again</ThemedText>
             </Pressable>
@@ -69,12 +71,12 @@ export default function ClosetScreen() {
         )}
 
         <Pressable
-          style={styles.fab}
+          style={[styles.fab, { backgroundColor: theme.text }]}
           onPress={() => router.push('/capture')}
           accessibilityRole="button"
           accessibilityLabel="Add a garment"
           accessibilityHint="Opens the camera">
-          <ThemedText style={styles.fabLabel} accessible={false}>
+          <ThemedText style={[styles.fabLabel, { color: theme.background }]} accessible={false}>
             +
           </ThemedText>
         </Pressable>
@@ -88,7 +90,13 @@ function Cell({ item }: { item: ClosetItem }) {
   return (
     <View style={styles.cell}>
       {item.thumbUrl ? (
-        <GarmentTile uri={item.thumbUrl} category={item.category} label={name} priority="low" />
+        <GarmentTile
+          uri={item.thumbUrl}
+          cacheKey={item.thumbPath ?? undefined}
+          category={item.category}
+          label={name}
+          priority="low"
+        />
       ) : (
         // Cutout still running, or it failed. Either way the garment exists.
         <View style={styles.placeholder}>
@@ -133,7 +141,6 @@ const styles = StyleSheet.create({
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.two, padding: Spacing.four },
   centred: { textAlign: 'center' },
   spikes: { marginTop: Spacing.three },
-  error: { color: '#C62828' },
 
   grid: { paddingHorizontal: 16 - GAP / 2, paddingBottom: 96 },
   cell: { flex: 1, paddingHorizontal: GAP / 2, paddingBottom: GAP, gap: 6 },
@@ -141,7 +148,7 @@ const styles = StyleSheet.create({
   placeholder: {
     width: '100%',
     aspectRatio: 3 / 4,
-    borderRadius: 20,
+    borderRadius: Radius.card,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(127,127,127,0.12)',
@@ -154,9 +161,8 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#111',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fabLabel: { color: '#fff', fontSize: 30, lineHeight: 34 },
+  fabLabel: { fontSize: 30, lineHeight: 34 },
 });

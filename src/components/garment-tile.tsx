@@ -1,6 +1,8 @@
 import { Image } from 'expo-image';
 import { StyleSheet, useColorScheme, View } from 'react-native';
 
+import { oklchToRgb, rgbToHex } from '@/domain/color/oklab';
+import type { Garment } from '@/domain/styling/types';
 import type { Category } from '@/domain/tagging/schema';
 
 /**
@@ -38,9 +40,15 @@ interface Props {
   label?: string;
   /** Grid tiles use the small thumb; the review screen wants the full tile. */
   priority?: 'low' | 'normal' | 'high';
+  /**
+   * The storage path. Signed URLs change on every refetch, and expo-image keys
+   * its cache by URL unless told otherwise -- so without this every refetch
+   * downloaded every tile again.
+   */
+  cacheKey?: string;
 }
 
-export function GarmentTile({ uri, category, dimmed, label, priority = 'normal' }: Props) {
+export function GarmentTile({ uri, category, dimmed, label, priority = 'normal', cacheKey }: Props) {
   const dark = useColorScheme() === 'dark';
   const scale = CATEGORY_DISPLAY_SCALE[category] ?? 0.9;
 
@@ -67,13 +75,59 @@ export function GarmentTile({ uri, category, dimmed, label, priority = 'normal' 
         accessible
         accessibilityRole="image"
         accessibilityLabel={label ?? `${category} garment`}
-        source={{ uri }}
+        source={{ uri, cacheKey }}
         style={[styles.garment, { transform: [{ scale }] }, dimmed && styles.dimmed]}
         contentFit="contain"
         transition={180}
         cachePolicy="memory-disk"
-        recyclingKey={uri}
+        recyclingKey={cacheKey ?? uri}
         priority={priority}
+      />
+    </View>
+  );
+}
+
+type Thumbable = Pick<Garment, 'category' | 'palette' | 'subcategory' | 'name'> & {
+  thumbUrl?: string | null;
+  thumbPath?: string | null;
+};
+
+/**
+ * A garment's tile, or -- with no image yet -- a block of its own colour on
+ * the same card, so an outfit with an unfinished capture (or the dev preview,
+ * which has no images at all) still reads as an outfit.
+ */
+export function GarmentThumb({ garment, dimmed }: { garment: Thumbable; dimmed?: boolean }) {
+  const dark = useColorScheme() === 'dark';
+  const label = garment.name ?? garment.subcategory.replace(/_/g, ' ');
+  if (garment.thumbUrl) {
+    return (
+      <GarmentTile
+        uri={garment.thumbUrl}
+        cacheKey={garment.thumbPath ?? undefined}
+        category={garment.category}
+        label={label}
+        dimmed={dimmed}
+        priority="low"
+      />
+    );
+  }
+  const main = garment.palette[0];
+  const scale = CATEGORY_DISPLAY_SCALE[garment.category] ?? 0.9;
+  return (
+    <View
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={label}
+      style={[styles.card, dark ? styles.cardDark : styles.cardLight, dimmed && styles.dimmed]}>
+      <View
+        style={[
+          styles.swatch,
+          // A charcoal tee on the near-black card was an empty-looking box.
+          dark && styles.swatchDark,
+          { transform: [{ scale }] },
+          { backgroundColor: main ? rgbToHex(oklchToRgb(main)) : 'rgba(127,127,127,0.25)' },
+        ]}
       />
     </View>
   );
@@ -109,4 +163,12 @@ const styles = StyleSheet.create({
   // Inset 10% on all sides, then scaled by category.
   garment: { width: '80%', height: '80%' },
   dimmed: { opacity: 0.45 },
+  swatch: {
+    width: '62%',
+    height: '62%',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(127,127,127,0.25)',
+  },
+  swatchDark: { borderColor: 'rgba(255,255,255,0.22)' },
 });

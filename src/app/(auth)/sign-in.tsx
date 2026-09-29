@@ -115,7 +115,7 @@ export default function SignInScreen() {
               />
             )}
 
-            {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
+            {error ? <ThemedText themeColor="danger">{error}</ThemedText> : null}
 
             <Pressable
               style={[styles.button, { backgroundColor: colors.text }, busy && styles.dim]}
@@ -178,5 +178,4 @@ const styles = StyleSheet.create({
   },
   buttonLabel: { fontWeight: '600' },
   dim: { opacity: 0.6 },
-  error: { color: '#C62828' },
 });

@@ -58,7 +58,7 @@ export async function fetchSubcategories(): Promise<SubcategoryRow[]> {
 /** Steps 1-2. */
 async function createRows(
   metrics: StillMetrics,
-  verdict: QualityVerdict
+  verdict: QualityVerdict,
 ): Promise<{ ids: CaptureIds; sourcePath: string }> {
   const userId = await requireUserId();
 
@@ -71,7 +71,7 @@ async function createRows(
 
   const placeholder = applyDefaults(
     { category: (unknownSub as SubcategoryRow).category, subcategory: 'unknown' },
-    rowToDefaults(unknownSub as SubcategoryRow)
+    rowToDefaults(unknownSub as SubcategoryRow),
   );
 
   const { data: item, error: itemErr } = await supabase
@@ -169,7 +169,7 @@ export function runCapture(
   localUri: string,
   metrics: StillMetrics,
   verdict: QualityVerdict,
-  onCreated: (ids: CaptureIds) => void
+  onCreated: (ids: CaptureIds) => void,
 ): Promise<ProcessedTile> {
   const existing = runs.get(localUri);
   if (existing) return existing;
@@ -223,7 +223,7 @@ async function awaitProcessed(imageId: string): Promise<ProcessedTile> {
 async function finishTile(
   imageId: string,
   tilePath: string,
-  thumbPath: string
+  thumbPath: string,
 ): Promise<ProcessedTile> {
   const [tile, thumb] = await Promise.all([signed(tilePath), signed(thumbPath)]);
 
@@ -268,7 +268,11 @@ export async function markKeptDespiteWarning(imageId: string) {
   if (error) throw error;
 }
 
-/** Step 7. The tag screen's only write. */
+/**
+ * Step 7, and the garment edit screen. Fields the form leaves out come from
+ * the subcategory's defaults; style tags are replaced only when the form
+ * sends them.
+ */
 export async function saveTags(itemId: string, form: GarmentForm, sub: SubcategoryRow) {
   const tags = applyDefaults(form, rowToDefaults(sub));
   const { data, error } = await supabase
@@ -280,6 +284,16 @@ export async function saveTags(itemId: string, form: GarmentForm, sub: Subcatego
   // PostgREST answers 204 when an update matches nothing -- a stale id, or a
   // row RLS hides -- and the tag screen used to navigate home as if it saved.
   if (!data?.length) throw new Error('that garment no longer exists');
+
+  if (form.styleTags) {
+    // A separate call, so a failure here leaves the old tags on a saved row:
+    // stale, never lost. Weights are not sent -- a tag the user picks is 1.0.
+    const { error: tagErr } = await supabase.rpc('set_style_tags', {
+      p_item_id: itemId,
+      p_tags: form.styleTags.map((t) => t.tag),
+    });
+    if (tagErr) throw tagErr;
+  }
   return tags;
 }
 
@@ -294,9 +308,11 @@ export async function saveTags(itemId: string, form: GarmentForm, sub: Subcatego
  * kept, because it is the only record of them; deleting it anyway would be
  * precisely the leak this function exists to prevent.
  *
- * ponytail: client-side because this is the only delete path in M1, and a
- * Postgres trigger cannot reach the storage API without pg_net plus a service
- * key. Revisit with a pg_cron orphan sweep if bulk delete arrives in M3.
+ * Also how a garment is deleted from its own page: the same cleanup applies.
+ *
+ * ponytail: client-side because a Postgres trigger cannot reach the storage
+ * API without pg_net plus a service key. Revisit with a pg_cron orphan sweep
+ * if bulk delete arrives in M3.
  */
 export async function discardCapture(itemId: string) {
   const { data: images, error: readErr } = await supabase

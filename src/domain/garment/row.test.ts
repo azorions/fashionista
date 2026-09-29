@@ -281,8 +281,35 @@ describe('security protections in the migration', () => {
     const fn = wardrobeSql.slice(wardrobeSql.indexOf('function public.save_outfit'));
     expect(fn.slice(0, 400)).toMatch(/security invoker/);
     expect(wardrobeSql).toMatch(
-      /revoke execute on function public\.save_outfit\(uuid\[\], text\) from public, anon/,
+      /revoke execute on function public\.save_outfit\(uuid\[\], text, text, text\) from public, anon/,
     );
+  });
+
+  it('only accepts the two outfit sources', () => {
+    expect(wardrobeSql).toContain("check (source in ('manual', 'suggested'))");
+  });
+
+  it('replaces style tags atomically through a security-invoker function', () => {
+    const fn = wardrobeSql.slice(wardrobeSql.indexOf('function public.set_style_tags'));
+    expect(fn.slice(0, 200)).toMatch(/security invoker/);
+    expect(wardrobeSql).toMatch(
+      /revoke execute on function public\.set_style_tags\(uuid, text\[\]\) from public, anon/,
+    );
+  });
+
+  it('drops an outfit once fewer than two garments remain in it', () => {
+    // Garment delete cascades out of outfit_items; without this the saved list
+    // fills with one-piece and empty outfits.
+    expect(wardrobeSql).toMatch(
+      /after delete on public\.outfit_items\s+for each row execute function public\.drop_outfit_below_two\(\)/,
+    );
+    const fn = wardrobeSql.slice(wardrobeSql.indexOf('function public.drop_outfit_below_two'));
+    expect(fn.slice(0, 400)).toContain('< 2');
+    // Definer, so an account delete (as supabase_auth_admin) can cascade
+    // through it -- and therefore it must only ever touch the deleted row's
+    // own outfit.
+    expect(fn.slice(0, 200)).toMatch(/security definer/);
+    expect(fn.slice(0, 400)).toContain('where o.id = old.outfit_id');
   });
 
   it('limits what and how much can be uploaded, not just where', () => {

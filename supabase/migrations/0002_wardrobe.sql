@@ -184,8 +184,10 @@ create table public.outfits (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users(id) on delete cascade,
   name       text,
-  -- 'manual' in M1; 'suggested' once the engine writes them in M2.
-  source     text not null default 'manual',
+  -- Built by hand, or a suggestion the user kept.
+  source     text not null default 'manual' check (source in ('manual', 'suggested')),
+  -- The vibe a suggestion was made for. Null for manual outfits.
+  vibe       text,
   created_at timestamptz not null default now()
 );
 
@@ -266,6 +268,30 @@ create trigger outfit_items_inherit_user
   before insert or update on public.outfit_items
   for each row execute function public.inherit_user_id_from_outfit();
 
+-- An outfit is at least two garments. Deleting a garment cascades out of
+-- outfit_items and could leave outfits of one piece, or of none, that the
+-- saved list would show as broken cards. When fewer than two remain, the
+-- outfit goes too.
+--
+-- security definer, like handle_new_user. Deleting an account cascades here
+-- as supabase_auth_admin, which has no privileges on public tables; before
+-- Postgres 18 an AFTER trigger runs as that role, so an invoker function
+-- failed with "permission denied" and no user with a saved outfit could be
+-- deleted. It is still narrow: it fires only for a row the caller was allowed
+-- to delete, and touches only that row's own outfit.
+create or replace function public.drop_outfit_below_two()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  delete from public.outfits o
+  where o.id = old.outfit_id
+    and (select count(*) from public.outfit_items oi where oi.outfit_id = old.outfit_id) < 2;
+  return null;
+end $$;
+
+create trigger outfit_items_drop_below_two
+  after delete on public.outfit_items
+  for each row execute function public.drop_outfit_below_two();
+
 -- ---------------------------------------------------------------------------
 -- RLS. This is the "dedicated only to you" promise. Retrofitting it onto
 -- populated tables is miserable, so it ships with the first migration.
@@ -315,7 +341,12 @@ create policy "own outfit items" on public.outfit_items
 -- rejects anyone else's garments.
 -- ---------------------------------------------------------------------------
 
-create or replace function public.save_outfit(p_item_ids uuid[], p_name text default null)
+create or replace function public.save_outfit(
+  p_item_ids uuid[],
+  p_name text default null,
+  p_source text default 'manual',
+  p_vibe text default null
+)
 returns uuid
 language plpgsql
 security invoker
@@ -329,8 +360,9 @@ begin
       using errcode = '22023';
   end if;
 
-  insert into public.outfits (user_id, name, source)
-  values ((select auth.uid()), p_name, 'manual')
+  -- source is validated by the table's CHECK.
+  insert into public.outfits (user_id, name, source, vibe)
+  values ((select auth.uid()), p_name, p_source, p_vibe)
   returning id into v_outfit;
 
   -- group by removes duplicates; min(ord) keeps each garment's first position
@@ -343,8 +375,34 @@ begin
   return v_outfit;
 end $$;
 
-revoke execute on function public.save_outfit(uuid[], text) from public, anon;
-grant execute on function public.save_outfit(uuid[], text) to authenticated;
+revoke execute on function public.save_outfit(uuid[], text, text, text) from public, anon;
+grant execute on function public.save_outfit(uuid[], text, text, text) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- set_style_tags: replace a garment's style tags in ONE transaction.
+--
+-- A delete then an insert from the client could leave a garment with no tags
+-- when the insert failed. security invoker: the delete only reaches the
+-- caller's own rows, and inherit_user_id_from_item stamps each new row with
+-- the garment's real owner, so tagging someone else's garment fails RLS.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.set_style_tags(p_item_id uuid, p_tags text[])
+returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  delete from public.item_style_tags where item_id = p_item_id;
+
+  insert into public.item_style_tags (item_id, tag_code, user_id)
+  select distinct p_item_id, t, (select auth.uid())
+  from unnest(coalesce(p_tags, '{}')) as t;
+end $$;
+
+revoke execute on function public.set_style_tags(uuid, text[]) from public, anon;
+grant execute on function public.set_style_tags(uuid, text[]) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Storage

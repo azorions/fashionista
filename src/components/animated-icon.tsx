@@ -43,6 +43,10 @@ export function AnimatedSplashOverlay() {
           scheduleOnRN(setVisible, false);
         }
       })}
+      // Decorative. If the fade is interrupted, `finished` is false and the
+      // overlay is never unmounted -- it sits at opacity 0 over the whole app.
+      // Without this it would silently swallow every tap.
+      pointerEvents="none"
       style={styles.splashOverlay}>
       {image}
     </Animated.View>

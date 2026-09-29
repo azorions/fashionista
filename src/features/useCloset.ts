@@ -16,13 +16,17 @@ import type { Garment } from '@/domain/styling/types';
 export interface ClosetItem extends Garment {
   /** Signed URL for the 256px thumb, or null while the cutout is still running. */
   thumbUrl: string | null;
+  /** Storage paths. Stable across refetches, unlike signed URLs: use as cache keys. */
+  thumbPath: string | null;
+  tilePath: string | null;
 }
 
-type Row = WardrobeItemWithTags & {
+export type ClosetRow = WardrobeItemWithTags & {
   cover: { thumb_path: string | null; tile_path: string | null; status: string } | null;
 };
 
-const SELECT =
+/** A wardrobe_items select with cover image and style tags. Embeddable: `item:wardrobe_items(${CLOSET_SELECT})`. */
+export const CLOSET_SELECT =
   '*, cover:item_images!wardrobe_items_cover_fk(thumb_path, tile_path, status), tags:item_style_tags(tag_code, weight)';
 
 /** One round trip for N urls instead of N. */
@@ -41,13 +45,16 @@ async function signMany(paths: string[]): Promise<Map<string, string>> {
   return out;
 }
 
-async function toClosetItems(rows: Row[]): Promise<ClosetItem[]> {
+/** Rows to closet items, signing every thumb in one round trip. */
+export async function toClosetItems(rows: ClosetRow[]): Promise<ClosetItem[]> {
   const paths = rows.map((r) => r.cover?.thumb_path).filter((p): p is string => !!p);
   const urls = await signMany(paths);
 
   return rows.map((row) => ({
     ...rowToGarment(row),
     thumbUrl: row.cover?.thumb_path ? (urls.get(row.cover.thumb_path) ?? null) : null,
+    thumbPath: row.cover?.thumb_path ?? null,
+    tilePath: row.cover?.tile_path ?? null,
   }));
 }
 
@@ -57,11 +64,11 @@ export function useCloset() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('wardrobe_items')
-        .select(SELECT)
+        .select(CLOSET_SELECT)
         .eq('archived', false)
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return toClosetItems((data ?? []) as unknown as Row[]);
+      return toClosetItems((data ?? []) as unknown as ClosetRow[]);
     },
   });
 }
@@ -75,12 +82,12 @@ export function useGarment(id: string | null) {
       // not an error. .single() threw PGRST116 at the tag screen instead.
       const { data, error } = await supabase
         .from('wardrobe_items')
-        .select(SELECT)
+        .select(CLOSET_SELECT)
         .eq('id', id!)
         .maybeSingle();
       if (error) throw error;
       if (!data) return null;
-      return (await toClosetItems([data as unknown as Row]))[0];
+      return (await toClosetItems([data as unknown as ClosetRow]))[0];
     },
   });
 }

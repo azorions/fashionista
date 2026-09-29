@@ -58,7 +58,7 @@ function preferenceHit<T>(
   items: Garment[],
   list: T[] | undefined,
   pick: (g: Garment) => T | T[],
-  applies: (g: Garment) => boolean = () => true
+  applies: (g: Garment) => boolean = () => true,
 ): number | null {
   if (!list || list.length === 0) return null;
   const relevant = items.filter(applies);
@@ -97,7 +97,28 @@ export const WEIGHTS = {
   tags: 0.7,
   pattern: 0.5,
   contrast: 0.6,
+  coherence: 0.6,
 } as const;
+
+const BARE_LEG_SUBCATEGORIES = new Set(['skirt', 'mini_skirt']);
+
+/**
+ * Do the shoes belong to the same season as what they are worn with?
+ *
+ * The aesthetic vibes have wide warmth bands, so nothing else stopped sandals
+ * going out with wool trousers. Shoes are compared with the bottom, or with
+ * the dress. A warmer shoe under a dress or skirt is fine -- boots with a
+ * dress is a look, and tights exist -- so only the cold-shoe direction counts
+ * there. Null when the outfit has no shoes or nothing to compare them with.
+ */
+function shoeGap(items: Garment[]): number | null {
+  const shoes = items.find((g) => g.bodyZone === 'feet');
+  const lower = items.find((g) => g.bodyZone === 'full_body' || g.layerRole === 'bottom');
+  if (!shoes || !lower) return null;
+  const gap = lower.warmth - shoes.warmth;
+  const bareLeg = lower.bodyZone === 'full_body' || BARE_LEG_SUBCATEGORIES.has(lower.subcategory);
+  return bareLeg ? Math.max(0, gap) : Math.abs(gap);
+}
 
 export function scoreOutfit(items: Garment[], vibe: VibeSpec): { score: number; terms: Term[] } {
   const terms: Term[] = [];
@@ -158,8 +179,18 @@ export function scoreOutfit(items: Garment[], vibe: VibeSpec): { score: number; 
     preferenceHit(items, vibe.prefer?.materials, (g) => g.materials),
     preferenceHit(items, vibe.prefer?.silhouettes, (g) => g.silhouette),
     preferenceHit(items, vibe.prefer?.sheens, (g) => g.sheen),
-    preferenceHit(items, vibe.prefer?.rises, (g) => g.rise, (g) => g.rise !== 'n_a'),
-    preferenceHit(items, vibe.prefer?.lengths, (g) => g.length, (g) => g.length !== 'n_a'),
+    preferenceHit(
+      items,
+      vibe.prefer?.rises,
+      (g) => g.rise,
+      (g) => g.rise !== 'n_a',
+    ),
+    preferenceHit(
+      items,
+      vibe.prefer?.lengths,
+      (g) => g.length,
+      (g) => g.length !== 'n_a',
+    ),
     preferenceHit(items, vibe.prefer?.patterns, (g) => g.pattern),
   ].filter((v): v is number => v !== null);
 
@@ -168,7 +199,9 @@ export function scoreOutfit(items: Garment[], vibe: VibeSpec): { score: number; 
       name: 'preference',
       // Not a mean over items: matching ANY preference strongly is worth more
       // than matching all of them weakly, which is how style actually works.
-      value: clamp01(Math.max(...prefs) * 0.7 + (prefs.reduce((a, b) => a + b, 0) / prefs.length) * 0.3),
+      value: clamp01(
+        Math.max(...prefs) * 0.7 + (prefs.reduce((a, b) => a + b, 0) / prefs.length) * 0.3,
+      ),
       weight: WEIGHTS.preference,
       evidence: {},
     });
@@ -198,6 +231,18 @@ export function scoreOutfit(items: Garment[], vibe: VibeSpec): { score: number; 
     weight: WEIGHTS.pattern,
     evidence: { clash: patternClash(items) },
   });
+
+  const gap = shoeGap(items);
+  if (gap !== null) {
+    terms.push({
+      name: 'coherence',
+      // Two warmth steps apart is still fine (sneakers with jeans); three is
+      // sandals with wool, four is past saving.
+      value: clamp01(1 - Math.max(0, gap - 2) / 2),
+      weight: WEIGHTS.coherence,
+      evidence: { gap },
+    });
+  }
 
   const total = terms.reduce((a, t) => a + t.value * t.weight, 0);
   const maxTotal = terms.reduce((a, t) => a + t.weight, 0);

@@ -38,6 +38,8 @@ const EXT_POOL = 5;
 const CORES_PER_ANCHOR = 3;
 /** No garment (shoes aside) appears in more than this many suggestions, while the closet allows it. */
 const MAX_REUSE = 2;
+/** The variety pass only chooses among outfits scoring at least this share of the best. */
+const VARIETY_FLOOR = 0.85;
 
 type Slot = 'top' | 'mid' | 'outer' | 'bottom' | 'dress' | 'shoes';
 
@@ -191,6 +193,12 @@ const anchorOf = (outfit: Garment[]) => outfit[0].id;
  * few) appears in more than MAX_REUSE suggestions, so one strong top cannot
  * take every slot. A second pass relaxes the reuse rule, because a small
  * closet genuinely cannot always vary.
+ *
+ * The variety pass only looks at outfits within VARIETY_FLOOR of the best.
+ * Without that, the route cap promoted a summer dress with a sweater (0.86)
+ * into streetwear over separates scoring 1.05: variety should choose among
+ * good outfits, never promote a bad one. Below the floor, the fill pass takes
+ * the best of what is left.
  */
 function select(ranked: ScoredOutfit[], want: number): ScoredOutfit[] {
   const picked: ScoredOutfit[] = [];
@@ -223,8 +231,9 @@ function select(ranked: ScoredOutfit[], want: number): ScoredOutfit[] {
     routes.set(routeOf(o), (routes.get(routeOf(o)) ?? 0) + 1);
   };
 
+  const floor = (ranked[0]?.score ?? 0) * VARIETY_FLOOR;
   for (const o of ranked) {
-    if (picked.length >= want) break;
+    if (picked.length >= want || o.score < floor) break;
     if (!clothes.has(clothesKey(o)) && !overused(o)) take(o);
   }
   for (const o of ranked) {

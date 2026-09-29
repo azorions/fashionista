@@ -19,9 +19,12 @@ const bucket = (v: number): Bucket => (v >= 0.8 ? 'great' : v >= 0.55 ? 'good' :
 
 const PHRASES: Record<string, Partial<Record<Bucket, (e: Record<string, unknown>) => string>>> = {
   layers: {
-    great: (e) => (Number(e.layers) <= 1 ? 'a single easy layer' : `${e.layers} layers working together`),
+    great: (e) =>
+      Number(e.layers) <= 1 ? 'a single easy layer' : `${e.layers} layers working together`,
     poor: (e) =>
-      Number(e.layers) <= 1 ? 'only one layer, which is thin for this' : 'more layers than this calls for',
+      Number(e.layers) <= 1
+        ? 'only one layer, which is thin for this'
+        : 'more layers than this calls for',
   },
   warmth: {
     great: (e) => `about right for the weather at ${e.warmth}/10`,
@@ -46,6 +49,9 @@ const PHRASES: Record<string, Partial<Record<Bucket, (e: Record<string, unknown>
   },
   pattern: {
     poor: () => 'two big patterns is a lot',
+  },
+  coherence: {
+    poor: () => 'the shoes are from a different season',
   },
   preference: {
     great: () => 'the fabrics and shapes are right for it',

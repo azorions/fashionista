@@ -274,3 +274,129 @@ export function tinyWardrobe(): Garment[] {
     }),
   ];
 }
+
+/**
+ * mixedWardrobe plus the pieces the four aesthetic vibes are built from: a
+ * graphic tee, hoodie, bomber and joggers for streetwear; an oxford, chinos
+ * and loafers for smart casual; a chunky cardigan for cozy. Also feeds the
+ * dev preview of the Style screen.
+ */
+export function styleWardrobe(): Garment[] {
+  const top = { category: 'top', bodyZone: 'torso' } as const;
+  const bottom = {
+    category: 'bottom',
+    bodyZone: 'legs',
+    layerRole: 'bottom',
+    length: 'full',
+  } as const;
+  const shoe = {
+    category: 'footwear',
+    bodyZone: 'feet',
+    layerRole: 'footwear',
+    length: 'n_a',
+  } as const;
+  return [
+    ...mixedWardrobe(),
+    garment({
+      ...top,
+      id: 'graphic-tee',
+      subcategory: 'tee',
+      layerRole: 'base',
+      silhouette: 'oversized',
+      pattern: 'graphic',
+      patternScale: 'large',
+      styleTags: [{ tag: 'streetwear', weight: 0.8 }],
+      palette: [swatch('#1f1f22', 0.7), swatch('#d94f30', 0.3)],
+    }),
+    garment({
+      ...top,
+      id: 'grey-hoodie',
+      subcategory: 'hoodie',
+      layerRole: 'mid',
+      altLayerRoles: ['outer'],
+      warmth: 4,
+      breathability: 2,
+      bulk: 4,
+      formality: 1,
+      silhouette: 'oversized',
+      materials: ['cotton', 'fleece'],
+      styleTags: [
+        { tag: 'streetwear', weight: 0.6 },
+        { tag: 'cozy', weight: 0.5 },
+      ],
+      palette: [swatch('#9a9ca0')],
+    }),
+    garment({
+      id: 'bomber',
+      subcategory: 'bomber',
+      category: 'outerwear',
+      bodyZone: 'torso',
+      layerRole: 'outer',
+      warmth: 3,
+      breathability: 2,
+      bulk: 3,
+      silhouette: 'relaxed',
+      materials: ['synthetic'],
+      sheen: 'subtle',
+      palette: [swatch('#3f4a3c')],
+    }),
+    garment({
+      ...top,
+      id: 'oxford',
+      subcategory: 'shirt',
+      layerRole: 'base',
+      altLayerRoles: ['mid'],
+      formality: 3,
+      palette: [swatch('#c9d6e6')],
+      styleTags: [{ tag: 'smart_casual', weight: 0.7 }],
+    }),
+    garment({
+      ...top,
+      id: 'chunky-cardigan',
+      subcategory: 'cardigan',
+      layerRole: 'mid',
+      altLayerRoles: ['outer'],
+      warmth: 4,
+      breathability: 2,
+      bulk: 4,
+      formality: 2,
+      silhouette: 'oversized',
+      materials: ['knit', 'wool'],
+      styleTags: [{ tag: 'cozy', weight: 0.9 }],
+      palette: [swatch('#d8cbb6')],
+    }),
+    garment({
+      ...bottom,
+      id: 'joggers',
+      subcategory: 'joggers',
+      warmth: 3,
+      breathability: 2,
+      bulk: 3,
+      formality: 1,
+      silhouette: 'relaxed',
+      materials: ['cotton', 'fleece'],
+      palette: [swatch('#2b2c30')],
+    }),
+    garment({
+      ...bottom,
+      id: 'chinos',
+      subcategory: 'chinos',
+      warmth: 2,
+      breathability: 3,
+      formality: 3,
+      rise: 'mid',
+      palette: [swatch('#b9a787')],
+    }),
+    garment({
+      ...shoe,
+      id: 'loafers',
+      subcategory: 'loafers',
+      warmth: 2,
+      breathability: 3,
+      formality: 4,
+      materials: ['leather'],
+      sheen: 'subtle',
+      palette: [swatch('#4a2e22')],
+    }),
+  ];
+}

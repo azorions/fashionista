@@ -7,7 +7,7 @@ import { ActivityIndicator, useColorScheme, View } from 'react-native';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { useSession } from '@/lib/auth';
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -41,9 +41,34 @@ function useAuthGate(session: ReturnType<typeof useSession>) {
   }, [session, segments, router]);
 }
 
+/**
+ * Drop every cached query when the signed-in USER changes.
+ *
+ * The client is module-scope and the closet is keyed ['closet'] with no user
+ * in it, so without this, signing out as A and in as B served B account A's
+ * garments -- with signed URLs still valid for an hour, so the tiles actually
+ * rendered. It would also make the two-account RLS test report a failure that
+ * is the cache's fault, not RLS's.
+ *
+ * Keyed on the user id rather than the session object, so a routine token
+ * refresh (new session, same person) does not wipe the cache.
+ */
+function useClearCacheOnUserChange(session: ReturnType<typeof useSession>) {
+  const lastUser = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (session === undefined) return;
+    const uid = session?.user.id ?? null;
+    if (lastUser.current !== uid) {
+      queryClient.clear();
+      lastUser.current = uid;
+    }
+  }, [session]);
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const session = useSession();
+  useClearCacheOnUserChange(session);
   useAuthGate(session);
 
   return (

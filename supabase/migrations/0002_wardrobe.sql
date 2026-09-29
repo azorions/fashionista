@@ -130,7 +130,21 @@ create table public.item_images (
   cost_usd numeric(8,5),
   error    text,
 
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+
+  -- The Edge Function reads these paths with the SERVICE ROLE, which bypasses
+  -- storage RLS entirely. Without this constraint a user could point
+  -- source_path at another user's folder and have the function sign and fetch
+  -- that photo for them -- the path-prefix storage policies never get a say.
+  --
+  -- A CHECK, unlike an RLS policy, binds the service role too. It is evaluated
+  -- after the BEFORE trigger has set user_id from the parent item, so every
+  -- path is pinned to the owner's own folder regardless of who wrote it.
+  constraint item_images_paths_in_own_folder check (
+    starts_with(source_path, user_id::text || '/' || item_id::text || '/')
+    and (tile_path  is null or starts_with(tile_path,  user_id::text || '/' || item_id::text || '/'))
+    and (thumb_path is null or starts_with(thumb_path, user_id::text || '/' || item_id::text || '/'))
+  )
 );
 
 create unique index item_images_version on public.item_images (item_id, render_mode, version);
@@ -191,7 +205,7 @@ create index outfit_items_item on public.outfit_items (item_id);
 -- ---------------------------------------------------------------------------
 
 create or replace function public.touch_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql set search_path = '' as $$
 begin
   new.updated_at := now();
   return new;
@@ -229,6 +243,22 @@ returns trigger language plpgsql security definer set search_path = '' as $$
 begin
   select o.user_id into new.user_id
   from public.outfits o where o.id = new.outfit_id;
+
+  -- An outfit may only contain its owner's garments. Deriving user_id from the
+  -- outfit alone let anyone link another user's item into their own outfit:
+  -- the row passed RLS because its user_id was theirs. item_images is safe
+  -- because it derives from the item itself; this table was not.
+  --
+  -- Also fails closed when the outfit does not exist (user_id is then null),
+  -- with a clearer message than the not-null violation it replaces.
+  if not exists (
+    select 1 from public.wardrobe_items i
+    where i.id = new.item_id and i.user_id = new.user_id
+  ) then
+    raise exception 'that garment does not belong to this outfit''s owner'
+      using errcode = '42501';
+  end if;
+
   return new;
 end $$;
 
@@ -273,11 +303,58 @@ create policy "own outfit items" on public.outfit_items
   using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
 -- ---------------------------------------------------------------------------
+-- save_outfit: an outfit and its garments in ONE transaction.
+--
+-- Two inserts from the client cannot be atomic. When the second failed -- the
+-- same garment in both slots violating the (outfit_id, item_id) key, or a
+-- dropped connection -- the first had already committed, leaving an empty
+-- outfit nobody could see or delete. A function body is a single transaction.
+--
+-- security invoker, so RLS governs both inserts exactly as it would for the
+-- client, and the ownership check in inherit_user_id_from_outfit still
+-- rejects anyone else's garments.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.save_outfit(p_item_ids uuid[], p_name text default null)
+returns uuid
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_outfit uuid;
+begin
+  if (select count(distinct x) from unnest(p_item_ids) as x) < 2 then
+    raise exception 'an outfit needs at least two different garments'
+      using errcode = '22023';
+  end if;
+
+  insert into public.outfits (user_id, name, source)
+  values ((select auth.uid()), p_name, 'manual')
+  returning id into v_outfit;
+
+  -- group by removes duplicates; min(ord) keeps each garment's first position
+  -- as its stacking order on the canvas.
+  insert into public.outfit_items (outfit_id, item_id, user_id, z_index)
+  select v_outfit, t.item_id, (select auth.uid()), (min(t.ord) - 1)::smallint
+  from unnest(p_item_ids) with ordinality as t(item_id, ord)
+  group by t.item_id;
+
+  return v_outfit;
+end $$;
+
+revoke execute on function public.save_outfit(uuid[], text) from public, anon;
+grant execute on function public.save_outfit(uuid[], text) to authenticated;
+
+-- ---------------------------------------------------------------------------
 -- Storage
 -- ---------------------------------------------------------------------------
 
-insert into storage.buckets (id, name, public)
-values ('wardrobe', 'wardrobe', false)
+-- The path policies below constrain WHERE a user may write, never WHAT or how
+-- much. Without these limits any signed-in user can fill their own folder
+-- with arbitrary bytes of arbitrary type. A 2048px JPEG is well under 2MB.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('wardrobe', 'wardrobe', false, 10485760, array['image/jpeg', 'image/webp', 'image/png'])
 on conflict (id) do nothing;
 
 -- FOOTGUN 2 of 3: these policies key on the PATH PREFIX, not on `owner`.

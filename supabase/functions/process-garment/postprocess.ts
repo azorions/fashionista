@@ -8,11 +8,9 @@
  * it. magick-wasm is Supabase's own documented recommendation for image work
  * in Edge Functions.
  *
- * Every call below was checked against @imagemagick/magick-wasm 0.0.43's type
- * definitions. Four of them were wrong on the first pass and would have failed
- * on deploy: AlphaOption does not exist (it is AlphaAction), repage() does not
- * exist (it is resetPage()), sigmoidalContrast has no boolean-first overload,
- * and the wasm asset is exported at /magick.wasm rather than /dist/magick.wasm.
+ * Every call below was checked against @imagemagick/magick-wasm 0.0.43 -- its
+ * type definitions for the image operators, and its shipped implementation for
+ * initialisation, because the types alone were not enough (see init()).
  *
  * STILL UNVERIFIED: that this runs at all. The WASM build is a subset of full
  * ImageMagick and nothing here has executed. Confirm a 1024x1024 RGBA decode
@@ -40,14 +38,34 @@ export const TILE = 1024;
 export const FIT = 0.84;
 export const THUMB = 256;
 
+/** Must match the version in the import above; imports cannot use a variable. */
+const PKG = 'npm:@imagemagick/magick-wasm@0.0.43';
+
 let ready: Promise<void> | null = null;
 
+/**
+ * Load the wasm as BYTES, never as a URL.
+ *
+ * initializeImageMagick's type accepts a URL, but its implementation throws
+ * "Only http/https protocol is supported" for any other scheme -- and
+ * import.meta.resolve on an npm: specifier yields file://. An earlier version
+ * of this file passed that URL and so failed every single capture, having
+ * trusted the type signature over the code behind it.
+ *
+ * This is Supabase's documented pattern (resolve the package, readFile the
+ * wasm relative to it), with the path corrected for 0.0.43, which moved the
+ * default build into x86/.
+ */
 function init(): Promise<void> {
-  // initializeImageMagick accepts a URL directly, so there is no need to fetch
-  // the bytes ourselves.
-  ready ??= initializeImageMagick(
-    new URL(import.meta.resolve('npm:@imagemagick/magick-wasm@0.0.43/magick.wasm'))
-  );
+  ready ??= (async () => {
+    const wasm = await Deno.readFile(new URL('x86/magick.wasm', import.meta.resolve(PKG)));
+    await initializeImageMagick(wasm);
+  })().catch((e) => {
+    // Memoising a REJECTED promise would poison the isolate: every later
+    // request would fail instantly with the same error. Allow a retry.
+    ready = null;
+    throw e;
+  });
   return ready;
 }
 

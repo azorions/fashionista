@@ -25,16 +25,33 @@ export default function OutfitsScreen() {
   const [picking, setPicking] = useState<'top' | 'bottom'>('top');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const ready = !!top && !!bottom;
+
+  // Each slot only offers garments that belong in it. That is what makes "two
+  // slots" mean top and bottom rather than any two things -- and it makes the
+  // same garment in both slots impossible, since every item has one body zone.
+  const candidates = (data ?? []).filter(
+    (i) =>
+      i.thumbUrl &&
+      (picking === 'top'
+        ? i.bodyZone === 'torso' || i.bodyZone === 'full_body'
+        : i.bodyZone === 'legs'),
+  );
 
   async function save() {
     if (!top || !bottom) return;
     setSaving(true);
+    setError(null);
     try {
       await saveOutfit([top.id, bottom.id]);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      // Previously there was no catch at all: a failure became an unhandled
+      // rejection and the link quietly flipped back to "Save outfit".
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -63,32 +80,46 @@ export default function OutfitsScreen() {
         </View>
 
         <View style={styles.pickerHeader}>
-          <ThemedText type="smallBold">
-            Pick a {picking === 'top' ? 'top' : 'bottom'}
-          </ThemedText>
+          <ThemedText type="smallBold">Pick a {picking === 'top' ? 'top' : 'bottom'}</ThemedText>
           {ready ? (
-            <Pressable onPress={save} disabled={saving}>
-              <ThemedText type="link">{saved ? 'Saved' : saving ? 'Saving…' : 'Save outfit'}</ThemedText>
+            <Pressable onPress={save} disabled={saving} accessibilityRole="button">
+              <ThemedText type="link">
+                {saved ? 'Saved' : saving ? 'Saving…' : 'Save outfit'}
+              </ThemedText>
             </Pressable>
           ) : null}
         </View>
 
+        {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
+
         {isLoading ? (
           <ActivityIndicator style={styles.pad} />
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
-            {(data ?? [])
-              .filter((i) => i.thumbUrl)
-              .map((item) => (
-                <Pressable
-                  key={item.id}
-                  style={styles.stripItem}
-                  onPress={() => (picking === 'top' ? setTop(item) : setBottom(item))}>
-                  <GarmentTile uri={item.thumbUrl!} category={item.category} priority="low" />
-                </Pressable>
-              ))}
-            {!data?.length ? (
-              <ThemedText style={styles.pad}>Add some garments first.</ThemedText>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.strip}
+          >
+            {candidates.map((item) => (
+              <Pressable
+                key={item.id}
+                style={styles.stripItem}
+                onPress={() => (picking === 'top' ? setTop(item) : setBottom(item))}
+              >
+                <GarmentTile
+                  uri={item.thumbUrl!}
+                  category={item.category}
+                  label={item.name ?? item.subcategory.replace(/_/g, ' ')}
+                  priority="low"
+                />
+              </Pressable>
+            ))}
+            {candidates.length === 0 ? (
+              <ThemedText style={styles.pad}>
+                {data?.length
+                  ? `No ${picking === 'top' ? 'tops' : 'bottoms'} yet.`
+                  : 'Add some garments first.'}
+              </ThemedText>
             ) : null}
           </ScrollView>
         )}
@@ -153,4 +184,5 @@ const styles = StyleSheet.create({
   strip: { paddingHorizontal: Spacing.four, gap: Spacing.two, paddingBottom: Spacing.four },
   stripItem: { width: 96 },
   pad: { padding: Spacing.four },
+  error: { color: '#C62828', paddingHorizontal: Spacing.four, paddingBottom: Spacing.two },
 });

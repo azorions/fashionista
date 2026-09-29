@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import taxonomySql from '../../../supabase/migrations/0001_taxonomy.sql?raw';
 import wardrobeSql from '../../../supabase/migrations/0002_wardrobe.sql?raw';
 import { GarmentTagsSchema } from '../tagging/schema';
-import { rowToDefaults, rowToGarment, tagsToRow, type SubcategoryRow, type WardrobeItemRow } from './row';
+import {
+  rowToDefaults,
+  rowToGarment,
+  tagsToRow,
+  type SubcategoryRow,
+  type WardrobeItemRow,
+} from './row';
 
 /**
  * Field mapping is where things go quietly wrong.
@@ -207,5 +214,59 @@ describe('rowToDefaults', () => {
       if (optional.includes(f)) continue;
       expect(Object.keys(d), `"${f}" has no subcategory default`).toContain(f);
     }
+  });
+});
+
+/**
+ * The protections in the migration are one careless edit away from vanishing,
+ * and nothing at runtime would notice until someone's photos leaked. These
+ * are string checks on purpose: they guard the TEXT of the migration, which is
+ * what gets applied.
+ */
+describe('security protections in the migration', () => {
+  it('pins every image path to the owner folder with a CHECK the service role cannot bypass', () => {
+    // The Edge Function signs source_path with the service role, which skips
+    // storage RLS. Without this, a user could point it at someone else's photo.
+    expect(wardrobeSql).toMatch(/constraint item_images_paths_in_own_folder check \(/);
+    // Substring checks, not a regex: a pattern here would have to escape
+    // ( | and \ through a template literal -- exactly the kind of test that
+    // quietly stops matching anything.
+    const from = wardrobeSql.indexOf('constraint item_images_paths_in_own_folder');
+    const body = wardrobeSql.slice(from, wardrobeSql.indexOf(');', from));
+    const prefix = "user_id::text || '/' || item_id::text || '/'";
+    for (const col of ['source_path', 'tile_path', 'thumb_path']) {
+      const at = body.indexOf(`starts_with(${col},`);
+      expect(at, `${col} is not pinned`).toBeGreaterThanOrEqual(0);
+      expect(body.slice(at, at + 90), `${col} prefix`).toContain(prefix);
+    }
+  });
+
+  it('refuses to link another user’s garment into an outfit', () => {
+    expect(wardrobeSql).toMatch(/does not belong to this outfit''s owner/);
+  });
+
+  it('saves an outfit atomically through a security-invoker function', () => {
+    expect(wardrobeSql).toMatch(/create or replace function public\.save_outfit/);
+    const fn = wardrobeSql.slice(wardrobeSql.indexOf('function public.save_outfit'));
+    expect(fn.slice(0, 400)).toMatch(/security invoker/);
+    expect(wardrobeSql).toMatch(
+      /revoke execute on function public\.save_outfit\(uuid\[\], text\) from public, anon/,
+    );
+  });
+
+  it('limits what and how much can be uploaded, not just where', () => {
+    expect(wardrobeSql).toMatch(/file_size_limit, allowed_mime_types/);
+  });
+
+  it('pins search_path on every function', () => {
+    const fns = [...wardrobeSql.matchAll(/create or replace function [\s\S]*?as \$\$/g)].map(
+      (m) => m[0],
+    );
+    expect(fns.length).toBeGreaterThanOrEqual(5);
+    for (const f of fns) expect(f, f.split('\n')[0]).toMatch(/set search_path = ''/);
+  });
+
+  it('keeps pgvector out of the public schema', () => {
+    expect(taxonomySql).toMatch(/create extension if not exists vector with schema extensions;/);
   });
 });

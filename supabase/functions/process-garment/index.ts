@@ -25,20 +25,53 @@ const json = (body: unknown, status = 200) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+/**
+ * The service key.
+ *
+ * Projects on Supabase's current key system inject it as SUPABASE_SECRET_KEYS,
+ * a JSON dictionary of named keys. SUPABASE_SERVICE_ROLE_KEY is still injected
+ * but documented as legacy, and this app's client already uses the new
+ * publishable key. Prefer the new variable, fall back to the old one, and fail
+ * loudly rather than build a client around an empty string.
+ */
+function serviceKey(): string {
+  const dict = Deno.env.get('SUPABASE_SECRET_KEYS');
+  if (dict) {
+    try {
+      const key = Object.values(JSON.parse(dict) as Record<string, unknown>).find(
+        (v): v is string => typeof v === 'string' && v.length > 0
+      );
+      if (key) return key;
+    } catch {
+      // Malformed -- fall through to the legacy variable.
+    }
+  }
+  const legacy = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (legacy) return legacy;
+  throw new Error('no service key available (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY)');
+}
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
   const authHeader = req.headers.get('Authorization');
   if (!authHeader) return json({ error: 'missing Authorization' }, 401);
 
-  const url = Deno.env.get('SUPABASE_URL')!;
-  // The secret key bypasses RLS, so every query below is explicitly scoped to
-  // the verified user id. Never trust a user_id from the request body.
-  const admin = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+  let admin;
+  try {
+    // The secret key bypasses RLS, so every query below is explicitly scoped
+    // to the verified user id. Never trust a user_id from the request body.
+    admin = createClient(Deno.env.get('SUPABASE_URL')!, serviceKey(), {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch (e) {
+    return json({ error: String(e) }, 500);
+  }
 
-  const { data: userData } = await createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: authHeader } },
-  }).auth.getUser();
+  // Verify the caller's JWT with the Auth server. Doing it through the admin
+  // client removes any dependency on the legacy SUPABASE_ANON_KEY.
+  const token = authHeader.replace(/^Bearer\s+/i, '');
+  const { data: userData } = await admin.auth.getUser(token);
 
   const user = userData?.user;
   if (!user) return json({ error: 'invalid token' }, 401);

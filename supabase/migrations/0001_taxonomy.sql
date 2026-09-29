@@ -15,7 +15,7 @@
 -- later is the kind of friction that gets deferred forever; the embedding
 -- COLUMN waits until M3, when the model -- and therefore its dimension -- is
 -- actually chosen.
-create extension if not exists vector;
+create extension if not exists vector with schema extensions;
 
 create type body_zone as enum (
   'torso', 'legs', 'full_body', 'feet', 'head', 'neck', 'hands', 'waist', 'carried'

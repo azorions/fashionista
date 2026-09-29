@@ -1,28 +1,20 @@
 import { supabase } from './supabase';
 
-/** Save the current canvas. z_index is slot order; M1 only ever has two. */
-export async function saveOutfit(itemIds: string[], name?: string) {
-  const { data: user } = await supabase.auth.getUser();
-  if (!user.user) throw new Error('not signed in');
-
-  const { data: outfit, error } = await supabase
-    .from('outfits')
-    .insert({ user_id: user.user.id, name: name ?? null, source: 'manual' })
-    .select('id')
-    .single();
+/**
+ * Save the current canvas as ONE atomic write.
+ *
+ * Goes through the save_outfit database function rather than two table
+ * inserts. Two inserts could not be atomic: when the second failed -- the same
+ * garment picked twice violates the (outfit_id, item_id) key -- the first had
+ * already committed an empty outfit that nothing could see or delete. The
+ * function also removes duplicates and refuses fewer than two distinct
+ * garments.
+ */
+export async function saveOutfit(itemIds: string[], name?: string): Promise<string> {
+  const { data, error } = await supabase.rpc('save_outfit', {
+    p_item_ids: itemIds,
+    p_name: name ?? null,
+  });
   if (error) throw error;
-
-  const { error: linkErr } = await supabase.from('outfit_items').insert(
-    itemIds.map((item_id, z_index) => ({
-      outfit_id: outfit.id,
-      item_id,
-      // Overwritten by the inherit_user_id_from_outfit trigger; sent only to
-      // satisfy the not-null column on insert.
-      user_id: user.user!.id,
-      z_index,
-    }))
-  );
-  if (linkErr) throw linkErr;
-
-  return outfit.id as string;
+  return data as string;
 }

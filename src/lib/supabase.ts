@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
 /**
@@ -38,7 +39,11 @@ export const isSupabaseConfigured = Boolean(url && publishableKey);
 
 export const supabase = createClient(url || 'http://localhost', publishableKey || 'unconfigured', {
   auth: {
-    storage: AsyncStorage,
+    // Native only. On web, supabase-js picks localStorage in a browser and
+    // memory on the server -- and web output is static, so every route is
+    // also rendered in Node, where AsyncStorage's web build touches `window`
+    // and the unhandled rejection took the whole dev server down.
+    storage: Platform.OS === 'web' ? undefined : AsyncStorage,
     autoRefreshToken: true,
     persistSession: true,
     // There is no URL to read a session out of in a native app, and leaving

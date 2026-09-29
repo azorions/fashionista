@@ -14,6 +14,13 @@ const queryClient = new QueryClient({
 });
 
 /**
+ * Dev tools that need no account. The spikes in particular are meant to be run
+ * before a Supabase project exists, so gating them behind sign-in made them
+ * unreachable. Development builds only.
+ */
+const DEV_ROUTES = new Set(['spikes', 'preview']);
+
+/**
  * Redirect between the signed-in and signed-out halves of the app.
  *
  * `session === undefined` means we are still reading the stored session and
@@ -29,7 +36,9 @@ function useAuthGate(session: ReturnType<typeof useSession>) {
     if (session === undefined) return;
 
     const inAuthGroup = segments[0] === '(auth)';
-    const target = !session && !inAuthGroup ? '/sign-in' : session && inAuthGroup ? '/' : null;
+    const devOpen = __DEV__ && DEV_ROUTES.has(segments[0] ?? '');
+    const target =
+      !session && !inAuthGroup && !devOpen ? '/sign-in' : session && inAuthGroup ? '/' : null;
 
     // Guard against re-firing the same navigation while segments settle.
     if (target && lastNav.current !== target) {
@@ -85,7 +94,9 @@ export default function RootLayout() {
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
             {/* Capture is pushed OVER the tabs — the camera wants the whole screen. */}
             <Stack.Screen name="capture" options={{ headerShown: false }} />
-            <Stack.Screen name="spikes" options={{ title: 'Dev spikes' }} />
+            {/* The spikes group has its own stack and headers; a root header on
+                top of it showed two. */}
+            <Stack.Screen name="spikes" options={{ headerShown: false }} />
           </Stack>
         )}
       </ThemeProvider>

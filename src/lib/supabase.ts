@@ -21,14 +21,22 @@ import 'react-native-url-polyfill/auto';
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const publishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-if (!url || !publishableKey) {
-  throw new Error(
-    'Missing Supabase config. Copy .env.example to .env.local and fill in ' +
-      'EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY, then restart the dev server.'
-  );
-}
+/**
+ * False until .env.local is filled in.
+ *
+ * This used to throw at import instead, and the root layout imports this file
+ * -- so without a Supabase project the app could not boot at all, and the dev
+ * spikes, which are meant to be run BEFORE a project exists, could never be
+ * opened. Now the app boots, sign-in explains what is missing, and dev routes
+ * work.
+ *
+ * Unconfigured, the client is built around a placeholder URL. supabase-js only
+ * checks the URL's shape at construction, so this cannot throw; every real
+ * call fails at use and returns an error, which the screens already handle.
+ */
+export const isSupabaseConfigured = Boolean(url && publishableKey);
 
-export const supabase = createClient(url, publishableKey, {
+export const supabase = createClient(url || 'http://localhost', publishableKey || 'unconfigured', {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,

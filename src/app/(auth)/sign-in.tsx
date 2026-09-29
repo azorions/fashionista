@@ -8,12 +8,14 @@ import {
   TextInput,
   useColorScheme,
 } from 'react-native';
+import { Link } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 import { sendCode, verifyCode } from '@/lib/auth';
+import { isSupabaseConfigured } from '@/lib/supabase';
 
 /**
  * Email, then a six-digit code. Two steps, no redirect anywhere.
@@ -42,6 +44,34 @@ export default function SignInScreen() {
   }
 
   const input = [styles.input, { color: colors.text, borderColor: colors.backgroundSelected }];
+
+  // No project yet: an email form here could only ever fail with a network
+  // error. Say what is missing instead, and point at what works without it.
+  if (!isSupabaseConfigured) {
+    return (
+      <ThemedView style={styles.fill}>
+        <SafeAreaView style={[styles.fill, styles.center]}>
+          <ThemedView style={styles.card}>
+            <ThemedText type="title">Fashionista</ThemedText>
+            <ThemedText style={styles.blurb}>
+              Supabase isn&apos;t set up yet, so there is nothing to sign in to. The README has
+              the steps: create a project, push the schema, then fill in .env.local and restart.
+            </ThemedText>
+            {__DEV__ ? (
+              <>
+                <Link href="/spikes">
+                  <ThemedText type="link">Run the dev spikes →</ThemedText>
+                </Link>
+                <Link href="/preview/style">
+                  <ThemedText type="link">Preview the Style screen →</ThemedText>
+                </Link>
+              </>
+            ) : null}
+          </ThemedView>
+        </SafeAreaView>
+      </ThemedView>
+    );
+  }
 
   return (
     <ThemedView style={styles.fill}>

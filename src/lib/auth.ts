@@ -1,7 +1,7 @@
 import type { Session } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
-import { supabase } from './supabase';
+import { isSupabaseConfigured, supabase } from './supabase';
 
 /**
  * Current session, or undefined while we are still finding out.
@@ -11,9 +11,13 @@ import { supabase } from './supabase';
  * start before the stored session loads.
  */
 export function useSession() {
-  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  // With no Supabase project there is nothing to wait for: signed out, now.
+  const [session, setSession] = useState<Session | null | undefined>(
+    isSupabaseConfigured ? undefined : null
+  );
 
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
     return () => sub.subscription.unsubscribe();

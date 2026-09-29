@@ -50,7 +50,11 @@ export const WINTER: VibeSpec = {
 
   // The mirror of summer: layered, and layered means torso layers.
   layers: { min: 2, max: 4, ideal: 3 },
-  warmth: { min: 6.5, max: 10, ideal: 8 },
+  // No ideal, deliberately. Winter's requirement is "warm enough"; nothing is
+  // too warm for it. With a peak at 8, a top-and-trousers outfit reaching 10
+  // was penalised for being warm, and on a realistic closet every winter
+  // suggestion came out as a dress -- which, in winter, means cold legs.
+  warmth: { min: 6.5, max: 10 },
   formality: { min: 1, max: 5 },
 
   prefer: {

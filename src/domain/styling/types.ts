@@ -57,6 +57,7 @@ export interface Term {
 
 export interface ScoredOutfit {
   items: Garment[];
+  /** Base in [0, 1], plus any signature bonuses -- so the best can exceed 1. Ranking only. */
   score: number;
   terms: Term[];
   /** One human sentence, templated from `terms`. */
@@ -90,7 +91,11 @@ export interface VibeSpec {
   /** Torso layers this vibe wants. "summer = not layered" lives here. */
   layers: { min: number; max: number; ideal: number };
   /** Summed outfit warmth, diminishing-returns formula. */
-  warmth: { min: number; max: number; ideal: number };
+  /**
+   * `ideal` is optional because not every vibe has a peak. Without one, the
+   * whole band scores 1 -- "warm enough" is a floor, not a target.
+   */
+  warmth: { min: number; max: number; ideal?: number };
   formality: { min: number; max: number };
 
   /** Preferred OKLCh chroma and lightness bands. Soft is low chroma, low contrast. */

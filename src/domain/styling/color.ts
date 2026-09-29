@@ -1,4 +1,4 @@
-import { hueDistance, isNeutral, NEUTRAL_CHROMA, type Oklch } from '../color/oklab';
+import { clamp01, hueDistance, isNeutral, NEUTRAL_CHROMA, type Oklch } from '../color/oklab';
 import type { Swatch } from '../color/palette';
 
 /**
@@ -80,7 +80,6 @@ export function pairHarmony(a: Oklch, b: Oklch): number {
   return clamp01(base - chromaPressure - muddiness);
 }
 
-const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /** The colour a garment reads as: its largest swatch. */
 export function dominant(palette: Swatch[]): Oklch | null {
@@ -137,40 +136,4 @@ export function lightnessSpread(palettes: Swatch[][]): number {
 export function meanChroma(palettes: Swatch[][]): number {
   const cs = palettes.map(dominant).filter((c): c is Oklch => c !== null).map((c) => c.c);
   return cs.length ? cs.reduce((a, b) => a + b, 0) / cs.length : 0;
-}
-
-/**
- * Precomputed pairwise harmony for a whole wardrobe.
- *
- * A 60-item closet is 1,770 pairs. Computing them once per wardrobe change
- * turns the most expensive scoring term into an array lookup, which is what
- * keeps suggestion latency in tens of milliseconds rather than hundreds.
- */
-export class HarmonyMatrix {
-  private readonly values: Float32Array;
-  private readonly index = new Map<string, number>();
-
-  constructor(items: { id: string; palette: Swatch[] }[]) {
-    const n = items.length;
-    items.forEach((it, i) => this.index.set(it.id, i));
-    this.values = new Float32Array(n * n);
-
-    const colours = items.map((it) => dominant(it.palette));
-    for (let i = 0; i < n; i++) {
-      for (let j = i; j < n; j++) {
-        const a = colours[i];
-        const b = colours[j];
-        const v = a && b ? pairHarmony(a, b) : 0.7; // untagged: neither reward nor punish
-        this.values[i * n + j] = v;
-        this.values[j * n + i] = v;
-      }
-    }
-  }
-
-  get(aId: string, bId: string): number {
-    const i = this.index.get(aId);
-    const j = this.index.get(bId);
-    if (i === undefined || j === undefined) return 0.7;
-    return this.values[i * this.index.size + j];
-  }
 }

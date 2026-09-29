@@ -1,3 +1,4 @@
+import { clamp01 } from '../color/oklab';
 import { lightnessSpread, meanChroma, outfitHarmony } from './color';
 import { outfitFormality, outfitWarmth, patternClash, torsoLayers } from './constraints';
 import type { Garment, Term, VibeSpec } from './types';
@@ -12,37 +13,63 @@ import type { Garment, Term, VibeSpec } from './types';
  * the colour harmony of an outfit that scored badly on colour.
  */
 
-const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
-
 /**
- * 1.0 inside [min,max] with a peak at `ideal`, falling off outside.
+ * 1.0 at `ideal` -- or anywhere inside the band when there is no ideal --
+ * falling away from it, and CONTINUOUS at both bounds.
  *
- * The falloff is scaled to HALF THE BAND WIDTH, not to the bound itself.
- * Scaling by the bound made leaving a wide band nearly free: a soft outfit at
- * warmth 7.1 against a 6.5 ceiling still scored 0.91, which the explanation
- * layer then rendered as "about right for the weather" — the app contradicting
- * its own spec in user-facing copy. Templated explanations only stay honest if
- * the buckets underneath them are.
+ * The previous version scaled its inside and outside branches by unrelated
+ * denominators, so the curve jumped UPWARD at each bound: a soft outfit at
+ * warmth 6.5 (the legal ceiling) scored 0.500, and at 6.6 (over it) scored
+ * 0.956. Leaving the band paid. That bug was introduced while fixing a
+ * different one in this same function, which is why it now has a property
+ * test rather than a spot check.
+ *
+ * Outside the band the score keeps falling from wherever the edge left it, at
+ * twice the inside slope, scaled by the band's own geometry. There is no floor
+ * of 1 any more: that made narrow bands such as chroma (0..0.1) nearly inert.
+ *
+ * Exported only so the property test can reach it.
  */
-function band(value: number, min: number, max: number, ideal?: number): number {
-  const scale = Math.max(1, (max - min) / 2);
-  if (value < min) return clamp01(1 - (min - value) / scale);
-  if (value > max) return clamp01(1 - (value - max) / scale);
-  if (ideal === undefined) return 1;
-  const reach = Math.max(ideal - min, max - ideal) || 1;
-  return clamp01(1 - Math.abs(value - ideal) / reach / 2);
+export function band(value: number, min: number, max: number, ideal?: number): number {
+  // With no ideal the band is flat, and falling to zero half a band-width
+  // past an edge is the tolerance. A full width made falling short far too
+  // cheap: winter (6.5..10) still gave a warmth-5.0 outfit 0.57, and a dress
+  // with a denim jacket turned up under "winter".
+  const reach =
+    ideal === undefined
+      ? Math.max((max - min) / 2, Number.EPSILON)
+      : Math.max(ideal - min, max - ideal, Number.EPSILON);
+  const inside = (v: number) => (ideal === undefined ? 1 : 1 - Math.abs(v - ideal) / reach / 2);
+
+  if (value >= min && value <= max) return clamp01(inside(value));
+  const edge = value < min ? min : max;
+  return clamp01(inside(edge) - Math.abs(value - edge) / reach);
 }
 
-/** Share of items matching a preference list. Absent list means "no opinion". */
-function preferenceHit<T>(items: Garment[], list: T[] | undefined, pick: (g: Garment) => T | T[]): number | null {
+/**
+ * Share of the items a preference APPLIES to that match it. Absent list, or
+ * nothing it applies to, means "no opinion".
+ *
+ * Dividing by every item capped zone-specific preferences: only a bottom has a
+ * rise, so a perfect low-rise outfit scored rise 1/3 or 1/5, and the "fabrics
+ * and shapes are right for it" line could essentially never be said.
+ */
+function preferenceHit<T>(
+  items: Garment[],
+  list: T[] | undefined,
+  pick: (g: Garment) => T | T[],
+  applies: (g: Garment) => boolean = () => true
+): number | null {
   if (!list || list.length === 0) return null;
+  const relevant = items.filter(applies);
+  if (!relevant.length) return null;
   let hits = 0;
-  for (const g of items) {
+  for (const g of relevant) {
     const v = pick(g);
     const arr = Array.isArray(v) ? v : [v];
     if (arr.some((x) => (list as unknown[]).includes(x))) hits++;
   }
-  return items.length ? hits / items.length : 0;
+  return hits / relevant.length;
 }
 
 /**
@@ -131,8 +158,8 @@ export function scoreOutfit(items: Garment[], vibe: VibeSpec): { score: number; 
     preferenceHit(items, vibe.prefer?.materials, (g) => g.materials),
     preferenceHit(items, vibe.prefer?.silhouettes, (g) => g.silhouette),
     preferenceHit(items, vibe.prefer?.sheens, (g) => g.sheen),
-    preferenceHit(items, vibe.prefer?.rises, (g) => g.rise),
-    preferenceHit(items, vibe.prefer?.lengths, (g) => g.length),
+    preferenceHit(items, vibe.prefer?.rises, (g) => g.rise, (g) => g.rise !== 'n_a'),
+    preferenceHit(items, vibe.prefer?.lengths, (g) => g.length, (g) => g.length !== 'n_a'),
     preferenceHit(items, vibe.prefer?.patterns, (g) => g.pattern),
   ].filter((v): v is number => v !== null);
 
@@ -185,5 +212,10 @@ export function scoreOutfit(items: Garment[], vibe: VibeSpec): { score: number; 
     }
   }
 
-  return { score: clamp01(score), terms };
+  // Deliberately NOT clamped to 1. Every term is already clamped, so the base
+  // is in [0, 1]; only a signature bonus can lift the total past it. Clamping
+  // flattened every top outfit to exactly 1.000 -- three of five winter
+  // suggestions tied -- and a tie is then settled by generation order, which
+  // is arbitrary. The total is only ever used to rank; nothing displays it.
+  return { score, terms };
 }

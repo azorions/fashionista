@@ -60,15 +60,18 @@ function join(parts: string[]): string {
 }
 
 export function explain(terms: Term[], vibe: VibeSpec, relaxed: string[] = []): string {
-  // A signature IS the reason. If one fired, lead with it.
-  const signature = terms.find((t) => t.name === 'signature');
+  // A signature IS the reason, so lead with every one that fired -- y2k can
+  // fire two, and naming only the first dropped half of why it was chosen.
+  const signatures = terms
+    .filter((t) => t.name === 'signature')
+    .map((t) => String(t.evidence?.describe ?? 'a signature look'));
 
   const ranked = terms
     .filter((t) => t.weight > 0 && PHRASES[t.name])
     .sort((a, b) => b.weight * Math.abs(b.value - 0.6) - a.weight * Math.abs(a.value - 0.6));
 
   const said: string[] = [];
-  if (signature) said.push(String(signature.evidence?.describe ?? 'a signature look'));
+  said.push(...signatures);
 
   for (const t of ranked) {
     if (said.length >= 3) break;
@@ -103,7 +106,8 @@ export function gapMessage(role: string, count: number): string {
     footwear: 'shoes',
   };
   const what = nice[role] ?? `${role} pieces`;
-  if (count === 0) return `You have no ${what} yet — that is what is blocking this.`;
-  if (count === 1) return `Only one option for ${what}, so every outfit here repeats it.`;
-  return `Two more ${what} would roughly triple what I can build.`;
+  // Only ever called for roles with zero or one option -- see closetGaps.
+  return count === 0
+    ? `You have no ${what} yet — that is what is blocking this.`
+    : `Only one option for ${what}, so every outfit here repeats it.`;
 }

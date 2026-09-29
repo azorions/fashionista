@@ -45,7 +45,15 @@ export interface Rgb {
 /** Chroma below this reads as a neutral — black, white, grey, most denim-free basics. */
 export const NEUTRAL_CHROMA = 0.06;
 
-const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+/**
+ * Clamp to [0, 1], sending NaN to 0.
+ *
+ * Written `v > 0 ? ... : 0` rather than `v < 0 ? 0 : ...` on purpose: every
+ * comparison with NaN is false, so the usual form returned NaN untouched, and
+ * one NaN anywhere reached a sort comparator and made the ranking undefined.
+ * This is the only copy; there used to be three.
+ */
+export const clamp01 = (v: number): number => (v > 0 ? (v < 1 ? v : 1) : 0);
 
 /** sRGB electro-optical transfer function, 0..1 -> linear light. */
 export function srgbToLinear(c: number): number {

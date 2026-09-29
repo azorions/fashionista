@@ -26,7 +26,7 @@ describe('structural constraints (H0 — never relaxed)', () => {
   it('rejects two bottoms', () => {
     const second = garment({ id: 'x', bodyZone: 'legs', layerRole: 'bottom', category: 'bottom' });
     expect(whyInvalid([find('white-tee'), find('low-jeans'), second, find('sneakers')])).toContain(
-      'only one legs garment'
+      'only one legs garment',
     );
   });
 
@@ -38,13 +38,13 @@ describe('structural constraints (H0 — never relaxed)', () => {
         find('denim-jacket'),
         find('low-jeans'),
         find('sneakers'),
-      ])
+      ]),
     ).toContain('only one outer layer');
   });
 
   it('rejects trousers worn with a dress', () => {
     expect(whyInvalid([find('summer-dress'), find('low-jeans'), find('sandals')])).toContain(
-      'a dress already covers top and bottom'
+      'a dress already covers top and bottom',
     );
   });
 
@@ -92,7 +92,7 @@ describe('warmth uses diminishing returns', () => {
     const find = (id: string) => w.find((g) => g.id === id)!;
     expect(torsoLayers([find('white-tee'), find('low-jeans'), find('sneakers')])).toBe(1);
     expect(
-      torsoLayers([find('white-tee'), find('wool-sweater'), find('wool-coat'), find('sneakers')])
+      torsoLayers([find('white-tee'), find('wool-sweater'), find('wool-coat'), find('sneakers')]),
     ).toBe(3);
   });
 });
@@ -122,7 +122,7 @@ describe('summer — the headline requirement is "not layered"', () => {
     // 3.7 against a 3.5 target is noise on a hand-tuned 0..10 scale.
     const warmest = Math.max(...outfits.map((o) => outfitWarmth(o.items)));
     const coolestWinter = Math.min(
-      ...suggest(mixedWardrobe(), WINTER, { count: 5 }).outfits.map((o) => outfitWarmth(o.items))
+      ...suggest(mixedWardrobe(), WINTER, { count: 5 }).outfits.map((o) => outfitWarmth(o.items)),
     );
     expect(warmest).toBeLessThan(coolestWinter);
   });
@@ -157,8 +157,12 @@ describe('winter — the mirror: layered', () => {
     for (const o of outfits) expect(torsoLayers(o.items)).toBeGreaterThanOrEqual(2);
   });
 
-  it('is genuinely warm', () => {
-    for (const o of outfits) expect(outfitWarmth(o.items)).toBeGreaterThan(5);
+  it('never falls below the warmth floor winter declares', () => {
+    // Enforced at H1: a dress and a denim jacket (5.0) used to be able to
+    // reach this list once the variety rule had used up the warmer pieces.
+    for (const o of outfits) {
+      expect(outfitWarmth(o.items)).toBeGreaterThanOrEqual(WINTER.warmth.min);
+    }
   });
 
   it('never suggests sandals', () => {
@@ -173,7 +177,7 @@ describe('winter — the mirror: layered', () => {
     const layeredFlannel = all.some(
       (o) =>
         o.items.some((i) => i.id === 'flannel') &&
-        o.items.some((i) => i.id !== 'flannel' && i.bodyZone === 'torso')
+        o.items.some((i) => i.id !== 'flannel' && i.bodyZone === 'torso'),
     );
     expect(layeredFlannel).toBe(true);
   });
@@ -251,6 +255,32 @@ describe('a tiny wardrobe degrades honestly', () => {
       if (o.relaxed.length) expect(o.why).toMatch(/bent a rule/i);
     }
   });
+
+  it('never claims to have bent a rule the outfit does not actually break', () => {
+    // The old test above only checked that the caption agreed with the flag.
+    // The flag itself was wrong: every veto lifted by the tier was reported,
+    // so tee + puffer + jeans + sneakers was captioned "bent a rule -- nothing
+    // summer-weight and covered shoes", and it broke neither.
+    for (const vibe of [SUMMER, WINTER, Y2K, SOFT]) {
+      for (const wardrobe of [tinyWardrobe(), mixedWardrobe()]) {
+        for (const o of suggest(wardrobe, vibe, { count: 5 }).outfits) {
+          for (const rule of o.relaxed) {
+            const veto = (vibe.veto ?? []).find((v) => v.describe === rule);
+            if (veto) {
+              expect(o.items.some(veto.test), `${vibe.label}: "${rule}"`).toBe(true);
+            } else if (rule.includes('layers')) {
+              const n = torsoLayers(o.items);
+              expect(n < vibe.layers.min || n > vibe.layers.max, rule).toBe(true);
+            } else if (rule.includes('cooler')) {
+              expect(outfitWarmth(o.items)).toBeLessThan(vibe.warmth.min);
+            } else {
+              throw new Error(`unrecognised relaxed rule: "${rule}"`);
+            }
+          }
+        }
+      }
+    }
+  });
 });
 
 describe('engine behaviour', () => {
@@ -264,6 +294,57 @@ describe('engine behaviour', () => {
     const outfits = suggest(mixedWardrobe(), SUMMER, { count: 5 }).outfits;
     const seen = new Set(outfits.map((o) => ids(o).join()));
     expect(seen.size).toBe(outfits.length);
+  });
+
+  // A locked garment FILLS its slot. The old generator removed locked items
+  // from the pools and prepended them to every combination instead.
+  it('still suggests outfits when the only pair of shoes is locked', () => {
+    // Emptied the shoe pool, so this returned nothing at all.
+    const w = tinyWardrobe();
+    const sneakers = w.find((g) => g.id === 'sneakers')!;
+    const { outfits } = suggest(w, SUMMER, { count: 3, locked: [sneakers] });
+    expect(outfits.length).toBeGreaterThan(0);
+    for (const o of outfits) expect(o.items.map((i) => i.id)).toContain('sneakers');
+  });
+
+  it('builds around a locked dress instead of disabling dresses', () => {
+    // Disabled the dress route, then paired the dress with a top and bottom
+    // that the structural rules rejected: zero outfits.
+    const w = mixedWardrobe();
+    const dress = w.find((g) => g.id === 'summer-dress')!;
+    const { outfits } = suggest(w, SUMMER, { count: 3, locked: [dress] });
+    expect(outfits.length).toBeGreaterThan(0);
+    for (const o of outfits) {
+      expect(o.items.map((i) => i.id)).toContain('summer-dress');
+      expect(isValid(o.items)).toBe(true);
+    }
+  });
+
+  it('never adds a second top around a locked one', () => {
+    // Produced [white-tee, linen-tank, jeans, sneakers] -- two base tops.
+    const w = mixedWardrobe();
+    const tee = w.find((g) => g.id === 'white-tee')!;
+    const { outfits } = suggest(w, SUMMER, { count: 5, locked: [tee] });
+    expect(outfits.length).toBeGreaterThan(0);
+    for (const o of outfits) {
+      const baseTops = o.items.filter((i) => i.bodyZone === 'torso' && i.layerRole === 'base');
+      expect(baseTops.map((i) => i.id)).toEqual(['white-tee']);
+    }
+  });
+
+  it('never places the multi-role flannel twice in one outfit', () => {
+    // The flannel can play base, mid AND outer. [flannel, sweater, flannel,
+    // jeans, boots] came out of the generator and outscored honest outfits,
+    // because the flannel was counted as two layers of warmth.
+    for (const o of suggest(mixedWardrobe(), WINTER, { count: 20 }).outfits) {
+      expect(o.items.filter((i) => i.id === 'flannel').length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('names every signature that fired, not just the first', () => {
+    const top = suggest(mixedWardrobe(), Y2K, { count: 1 }).outfits[0];
+    expect(top.why).toContain('low rise with a cropped top');
+    expect(top.why).toContain('a bit of shine');
   });
 
   it('respects locked items', () => {
@@ -290,11 +371,16 @@ describe('engine behaviour', () => {
     expect(suggest(shoesOnly, SUMMER).outfits).toEqual([]);
   });
 
-  it('scores every returned outfit between 0 and 1', () => {
+  it('scores every outfit as a finite, non-negative base plus signature bonuses', () => {
+    // The base is in [0, 1]; only signature bonuses lift the total past 1.
+    // It used to be clamped to 1, which tied every top outfit at 1.000 and
+    // left the order among them to generation order.
     for (const vibe of [SUMMER, WINTER, Y2K, SOFT]) {
+      const maxBonus = (vibe.signature ?? []).reduce((a, s) => a + s.bonus, 0);
       for (const o of suggest(mixedWardrobe(), vibe, { count: 5 }).outfits) {
+        expect(Number.isFinite(o.score)).toBe(true);
         expect(o.score).toBeGreaterThanOrEqual(0);
-        expect(o.score).toBeLessThanOrEqual(1);
+        expect(o.score).toBeLessThanOrEqual(1 + maxBonus + 1e-9);
       }
     }
   });
@@ -313,8 +399,11 @@ describe('engine behaviour', () => {
       for (const o of suggest(mixedWardrobe(), vibe, { count: 5 }).outfits) {
         if (!o.why.includes('about right')) continue;
         const w = outfitWarmth(o.items);
-        expect(w, `${vibe.label}: "${o.why}"`).toBeLessThanOrEqual(vibe.warmth.max + 0.5);
-        expect(w, `${vibe.label}: "${o.why}"`).toBeGreaterThanOrEqual(vibe.warmth.min - 0.5);
+        // The exact band. This used to allow half a point of slack either
+        // side -- precisely enough to hide the band() discontinuity it was
+        // written to guard.
+        expect(w, `${vibe.label}: "${o.why}"`).toBeLessThanOrEqual(vibe.warmth.max);
+        expect(w, `${vibe.label}: "${o.why}"`).toBeGreaterThanOrEqual(vibe.warmth.min);
       }
     }
   });
@@ -327,14 +416,114 @@ describe('engine behaviour', () => {
   });
 
   it('stays fast on a 60-item wardrobe', () => {
-    // Pad the fixture out to a realistic closet size.
-    const big = [...mixedWardrobe()];
-    while (big.length < 60) {
-      const base = big[big.length % 14];
-      big.push({ ...base, id: `${base.id}-${big.length}`, palette: [swatch('#7f8c9a')] });
-    }
     const t0 = performance.now();
-    suggest(big, WINTER, { count: 5 });
+    for (const vibe of [SUMMER, WINTER, Y2K, SOFT]) suggest(realisticCloset(), vibe, { count: 5 });
     expect(performance.now() - t0).toBeLessThan(1500);
+  });
+});
+
+/**
+ * Sixty distinct garments coloured like a real closet -- mostly neutrals, a
+ * few accents -- rather than the 14-item fixture cloned with new ids.
+ *
+ * The old perf test used the clones, and passed BECAUSE of a bug: the search
+ * stopped after the first-ranked top, so it was fast and every suggestion
+ * wore the same shirt.
+ */
+function realisticCloset() {
+  const hex = [
+    '#1a1a1a',
+    '#f2f2f0',
+    '#8a8f98',
+    '#1f2a44',
+    '#4a6274',
+    '#d8cbb3',
+    '#b08a5a',
+    '#2e2a27',
+    '#c9bfae',
+    '#7a1f2b',
+    '#2f5d3a',
+    '#e6d3a3',
+  ];
+  const c = (i: number) => [swatch(hex[i % hex.length])];
+  const many = (n: number, make: (i: number) => ReturnType<typeof garment>) =>
+    Array.from({ length: n }, (_, i) => make(i));
+  return [
+    ...many(14, (i) => garment({ id: `top${i}`, warmth: 1 + (i % 3), palette: c(i) })),
+    ...many(10, (i) =>
+      garment({ id: `mid${i}`, layerRole: 'mid', warmth: 3 + (i % 2), bulk: 2, palette: c(i + 3) }),
+    ),
+    ...many(8, (i) =>
+      garment({
+        id: `out${i}`,
+        category: 'outerwear',
+        layerRole: 'outer',
+        warmth: 3 + (i % 3),
+        palette: c(i + 5),
+      }),
+    ),
+    ...many(14, (i) =>
+      garment({
+        id: `bot${i}`,
+        category: 'bottom',
+        bodyZone: 'legs',
+        layerRole: 'bottom',
+        warmth: 1 + (i % 4),
+        palette: c(i + 7),
+      }),
+    ),
+    ...many(10, (i) =>
+      garment({
+        id: `shoe${i}`,
+        category: 'footwear',
+        bodyZone: 'feet',
+        layerRole: 'footwear',
+        warmth: 1 + (i % 4),
+        palette: c(i + 2),
+      }),
+    ),
+    ...many(4, (i) =>
+      garment({
+        id: `dress${i}`,
+        category: 'dress',
+        bodyZone: 'full_body',
+        layerRole: 'full_body',
+        warmth: 2,
+        palette: c(i + 9),
+      }),
+    ),
+  ];
+}
+
+describe('a real-sized closet gets real variety', () => {
+  // The dress or top each outfit is built around.
+  const anchors = (vibe: typeof SUMMER) =>
+    suggest(realisticCloset(), vibe, { count: 5 }).outfits.map((o) => o.items[0].id);
+
+  it.each([
+    ['Summer', SUMMER],
+    ['Winter', WINTER],
+    ['Y2K', Y2K],
+    ['Soft', SOFT],
+  ] as const)('%s draws on at least three different dresses or tops', (_n, vibe) => {
+    // Was ONE for every vibe: truncation meant only the first-ranked top was
+    // ever scored.
+    expect(new Set(anchors(vibe)).size).toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not fill winter with dresses when there are fourteen tops', () => {
+    // Exact ties between dress- and separates-based outfits used to resolve
+    // by generation order, and dresses are generated first.
+    const a = anchors(WINTER);
+    expect(a.some((id) => id.startsWith('top'))).toBe(true);
+    expect(a.filter((id) => id.startsWith('dress')).length).toBeLessThanOrEqual(3);
+  });
+
+  it('never repeats a garment within one outfit, at any size', () => {
+    for (const vibe of [SUMMER, WINTER, Y2K, SOFT]) {
+      for (const o of suggest(realisticCloset(), vibe, { count: 10 }).outfits) {
+        expect(new Set(o.items.map((i) => i.id)).size).toBe(o.items.length);
+      }
+    }
   });
 });

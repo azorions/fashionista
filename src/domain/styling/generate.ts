@@ -1,29 +1,43 @@
-import { isValid, structuralViolations } from './constraints';
+import { isValid, outfitWarmth, structuralViolations, torsoLayers } from './constraints';
 import { explain, gapMessage } from './explain';
 import { scoreOutfit } from './score';
-import type { ClosetGap, Garment, ScoredOutfit, SuggestOptions, SuggestResult, VibeSpec } from './types';
+import type {
+  ClosetGap,
+  Garment,
+  ScoredOutfit,
+  SuggestOptions,
+  SuggestResult,
+  VibeSpec,
+} from './types';
 
 /**
  * Turning a closet into outfits.
  *
- * A 60-item wardrobe has roughly 95,000 structurally valid combinations, and
- * scoring all of them with every term would be tens of millions of float ops
- * — several hundred milliseconds in Hermes, for an interaction that should
- * feel instant. Two things fix that, in this order:
+ * A 60-item wardrobe has roughly 95,000 structurally valid combinations --
+ * far too many to score on every refresh. The search is split in two:
  *
- *   1. Filter per slot BEFORE combining. A summer vibe throws out every
- *      warmth-4 garment up front, so the combinatorial explosion never
- *      happens on items that were going to score zero.
- *   2. Cap the per-slot candidate pool. Beyond a handful of options per slot,
- *      extra combinations are near-duplicates that add nothing a human would
- *      notice.
+ *   1. CORES. Every dress+shoes and every top+bottom+shoes from the per-slot
+ *      pools: at most 8x8x8 + 8x8 = 576, all scored.
+ *   2. LAYERS. The best three cores for EACH top or dress are extended with
+ *      mid and outer layers.
  *
- * The result is tens of milliseconds, deterministic, and offline.
+ * The previous version enumerated depth-first under a flat 4,000-combination
+ * cap. One top's layered variants cost more than the whole cap, so on a real
+ * closet only the first-ranked top was ever scored and every suggestion wore
+ * the same shirt. Keeping the best cores per top, rather than the best cores
+ * overall, is what guarantees every top a fair hearing.
+ *
+ * Deterministic, offline, and tens of milliseconds.
  */
 
-/** Per-slot cap. Raising this multiplies the search space, not the quality. */
+/** Per-slot candidate cap for cores. Raising it multiplies work, not quality. */
 const POOL = 8;
-const MAX_COMBINATIONS = 4000;
+/** Mid and outer candidates tried when extending a core. */
+const EXT_POOL = 5;
+/** Cores kept per top or dress for extension. */
+const CORES_PER_ANCHOR = 3;
+/** No garment (shoes aside) appears in more than this many suggestions, while the closet allows it. */
+const MAX_REUSE = 2;
 
 type Slot = 'top' | 'mid' | 'outer' | 'bottom' | 'dress' | 'shoes';
 
@@ -39,38 +53,23 @@ function slotOf(g: Garment): Slot | null {
   return null;
 }
 
-/** Slots a garment could fill, honouring altLayerRoles. A flannel is two slots. */
+/** Slots a garment could fill, honouring altLayerRoles. A flannel is three. */
 function slotsOf(g: Garment): Slot[] {
   const primary = slotOf(g);
   if (!primary) return [];
   if (g.bodyZone !== 'torso') return [primary];
 
   const extra = g.altLayerRoles
-    .map((r): Slot | null => (r === 'outer' ? 'outer' : r === 'mid' ? 'mid' : r === 'base' ? 'top' : null))
+    .map((r): Slot | null =>
+      r === 'outer' ? 'outer' : r === 'mid' ? 'mid' : r === 'base' ? 'top' : null,
+    )
     .filter((s): s is Slot => s !== null);
 
   return [...new Set([primary, ...extra])];
 }
 
-interface Vetoed {
-  kept: Garment[];
-  /** Describes of vetoes that removed something, so relaxing can report them. */
-  applied: string[];
-}
-
-function applyVetoes(items: Garment[], vibe: VibeSpec, tiers: ('H1' | 'H2')[]): Vetoed {
-  const applied = new Set<string>();
-  const kept = items.filter((g) => {
-    for (const v of vibe.veto ?? []) {
-      if (!tiers.includes(v.tier)) continue;
-      if (v.test(g)) {
-        applied.add(v.describe);
-        return false;
-      }
-    }
-    return true;
-  });
-  return { kept, applied: [...applied] };
+function withoutVetoed(items: Garment[], vibe: VibeSpec, tiers: ('H1' | 'H2')[]): Garment[] {
+  return items.filter((g) => !(vibe.veto ?? []).some((v) => tiers.includes(v.tier) && v.test(g)));
 }
 
 function pools(items: Garment[], vibe: VibeSpec): Record<Slot, Garment[]> {
@@ -114,66 +113,151 @@ function soloAffinity(g: Garment, vibe: VibeSpec): number {
   return s;
 }
 
-/** Enumerate structurally valid combinations from the pools. */
-function* combinations(p: Record<Slot, Garment[]>, locked: Garment[]): Generator<Garment[]> {
-  const lockedIds = new Set(locked.map((l) => l.id));
-  const free = (list: Garment[]) => list.filter((g) => !lockedIds.has(g.id));
+/**
+ * A locked garment FILLS its slot.
+ *
+ * The old code removed locked items from the pools and prepended them to every
+ * combination, so locking the only pair of shoes emptied the shoe pool and
+ * returned zero outfits, locking a dress disabled the dress route entirely,
+ * and locking a top produced outfits with two tops.
+ */
+type Pick = (slot: Slot) => Garment[];
 
-  const shoes = free(p.shoes);
-  if (!shoes.length) return;
-
-  // Route A: dress (+ optional outer). A dress is the top and the bottom.
-  for (const dress of free(p.dress)) {
-    for (const shoe of shoes) {
-      yield [...locked, dress, shoe];
-      for (const outer of free(p.outer)) yield [...locked, dress, outer, shoe];
-    }
+function picker(p: Record<Slot, Garment[]>, locked: Garment[]): Pick {
+  const fixed: Partial<Record<Slot, Garment>> = {};
+  for (const g of locked) {
+    const s = slotOf(g);
+    if (s && !fixed[s]) fixed[s] = g;
   }
+  const lockedIds = new Set(locked.map((g) => g.id));
+  return (slot) => {
+    const f = fixed[slot];
+    if (f) return [f];
+    // A locked garment must not ALSO turn up in a slot it can play secondarily.
+    return p[slot].filter((g) => !lockedIds.has(g.id));
+  };
+}
 
-  // Route B: top + bottom, with optional mid and outer layers.
-  for (const top of free(p.top)) {
-    for (const bottom of free(p.bottom)) {
-      for (const shoe of shoes) {
-        yield [...locked, top, bottom, shoe];
-        for (const mid of free(p.mid)) {
-          if (mid.id === top.id) continue;
-          yield [...locked, top, mid, bottom, shoe];
-          for (const outer of free(p.outer)) {
-            if (outer.id === mid.id) continue;
-            yield [...locked, top, mid, outer, bottom, shoe];
-          }
-        }
-        for (const outer of free(p.outer)) {
-          if (outer.id === top.id) continue;
-          yield [...locked, top, outer, bottom, shoe];
-        }
-      }
+/** Stage 1: every dress+shoes and top+bottom+shoes. */
+function* cores(pick: Pick, locked: Garment[]): Generator<Garment[]> {
+  const lockedSlots = new Set(locked.map(slotOf));
+  const shoes = pick('shoes');
+
+  // A locked top or bottom rules the dress route out; a locked dress rules
+  // the top route out. Otherwise both are open.
+  if (!lockedSlots.has('top') && !lockedSlots.has('bottom')) {
+    for (const d of pick('dress')) for (const s of shoes) yield [d, s];
+  }
+  if (!lockedSlots.has('dress')) {
+    for (const t of pick('top')) {
+      for (const b of pick('bottom')) for (const s of shoes) yield [t, b, s];
     }
   }
 }
 
-/** Two outfits sharing everything but the shoes are one suggestion, not two. */
-function distinct(outfits: ScoredOutfit[], want: number): ScoredOutfit[] {
+/**
+ * Stage 2: layers over a core.
+ *
+ * A running set of ids already placed replaces the old pairwise `id ===`
+ * guards, which missed one pairing: a flannel can play base, mid AND outer,
+ * and `[flannel, sweater, flannel, jeans, boots]` came out of the generator
+ * -- and scored BETTER than the honest outfit, because the flannel counted as
+ * two layers of warmth. It even clashed with itself on pattern.
+ */
+function* layered(core: Garment[], pick: Pick): Generator<Garment[]> {
+  const placed = new Set(core.map((g) => g.id));
+  const mids = pick('mid')
+    .filter((g) => !placed.has(g.id))
+    .slice(0, EXT_POOL);
+  const outers = pick('outer')
+    .filter((g) => !placed.has(g.id))
+    .slice(0, EXT_POOL);
+
+  for (const m of mids) {
+    yield [...core, m];
+    for (const o of outers) if (o.id !== m.id) yield [...core, m, o];
+  }
+  for (const o of outers) yield [...core, o];
+}
+
+/** The garment an outfit is built around: its dress, or its top. */
+const anchorOf = (outfit: Garment[]) => outfit[0].id;
+
+/**
+ * Choose which ranked outfits to show.
+ *
+ * Two rules. The same clothes in different shoes are one suggestion, not two.
+ * And while the closet allows it, no garment (shoes aside -- most people own
+ * few) appears in more than MAX_REUSE suggestions, so one strong top cannot
+ * take every slot. A second pass relaxes the reuse rule, because a small
+ * closet genuinely cannot always vary.
+ */
+function select(ranked: ScoredOutfit[], want: number): ScoredOutfit[] {
   const picked: ScoredOutfit[] = [];
-  for (const o of outfits) {
-    const ids = new Set(o.items.map((i) => i.id));
-    const tooSimilar = picked.some((p) => {
-      const shared = p.items.filter((i) => ids.has(i.id)).length;
-      return shared >= Math.max(p.items.length, o.items.length) - 1;
-    });
-    if (!tooSimilar) picked.push(o);
+  const clothes = new Set<string>();
+  const uses = new Map<string, number>();
+
+  // Dress-based and separates-based outfits often tie exactly, and a tie is
+  // settled by generation order -- dresses are generated first -- so a closet
+  // with fourteen tops was offered five dresses for winter. While the other
+  // route has candidates, neither may take more than half the slots.
+  const routeOf = (o: ScoredOutfit) =>
+    o.items.some((g) => g.bodyZone === 'full_body') ? 'dress' : 'separates';
+  const routes = new Map<string, number>();
+  const routeCap = Math.ceil(want / 2);
+  const bothRoutes = new Set(ranked.map(routeOf)).size > 1;
+
+  const clothesKey = (o: ScoredOutfit) =>
+    o.items
+      .filter((g) => g.bodyZone !== 'feet')
+      .map((g) => g.id)
+      .sort()
+      .join('|');
+  const overused = (o: ScoredOutfit) =>
+    o.items.some((g) => g.bodyZone !== 'feet' && (uses.get(g.id) ?? 0) >= MAX_REUSE) ||
+    (bothRoutes && (routes.get(routeOf(o)) ?? 0) >= routeCap);
+  const take = (o: ScoredOutfit) => {
+    picked.push(o);
+    clothes.add(clothesKey(o));
+    for (const g of o.items) uses.set(g.id, (uses.get(g.id) ?? 0) + 1);
+    routes.set(routeOf(o), (routes.get(routeOf(o)) ?? 0) + 1);
+  };
+
+  for (const o of ranked) {
     if (picked.length >= want) break;
+    if (!clothes.has(clothesKey(o)) && !overused(o)) take(o);
   }
-  return picked;
+  for (const o of ranked) {
+    if (picked.length >= want) break;
+    if (!clothes.has(clothesKey(o))) take(o);
+  }
+  // The passes decide WHICH outfits to show; they still read best-first. The
+  // fill pass used to append its picks after the variety pass, so a 0.93
+  // outfit could be listed beneath a 0.71 one.
+  return picked.sort((a, b) => b.score - a.score);
 }
 
-function closetGaps(items: Garment[]): ClosetGap[] {
-  const counts = { base: 0, mid: 0, outer: 0, bottom: 0, footwear: 0 };
-  for (const g of items) {
-    for (const r of [g.layerRole, ...g.altLayerRoles]) {
-      if (r in counts) counts[r as keyof typeof counts]++;
-    }
+/**
+ * What the closet is missing, for the roles this vibe actually needs.
+ *
+ * Mid and outer layers only count when the vibe requires layering -- a thin
+ * closet asked for "summer" used to be told a missing coat was the problem.
+ * And a dress covers both the top and the bottom, so a closet built around
+ * dresses is no longer told it has no tops.
+ */
+function closetGaps(items: Garment[], vibe: VibeSpec): ClosetGap[] {
+  const counts: Record<string, number> = { base: 0, bottom: 0, footwear: 0 };
+  if (vibe.layers.min >= 2) {
+    counts.mid = 0;
+    counts.outer = 0;
   }
+
+  for (const g of items) {
+    const roles =
+      g.layerRole === 'full_body' ? ['base', 'bottom'] : [g.layerRole, ...g.altLayerRoles];
+    for (const r of new Set(roles)) if (r in counts) counts[r]++;
+  }
+
   return Object.entries(counts)
     .filter(([, n]) => n <= 1)
     .sort((a, b) => a[1] - b[1])
@@ -190,17 +274,17 @@ function closetGaps(items: Garment[]): ClosetGap[] {
 export function suggest(
   wardrobe: Garment[],
   vibe: VibeSpec,
-  options: SuggestOptions = {}
+  options: SuggestOptions = {},
 ): SuggestResult {
   const want = options.count ?? 5;
+  const locked = options.locked ?? [];
+  const lockedIds = locked.map((g) => g.id);
   const excluded = new Set(options.exclude ?? []);
   const available = wardrobe.filter((g) => !g.archived && !excluded.has(g.id));
 
   /*
-   * The relaxation ladder. Each rung drops a tier of vibe vetoes and records
-   * what it dropped, so a thin closet gets fewer HONEST outfits with a caption
-   * rather than five padded ones. H0 is never in this list: structural rules
-   * are not preferences.
+   * The relaxation ladder. Each rung lifts a tier of vibe vetoes. H0 is never
+   * on it: structural rules are not preferences.
    */
   const rungs: { tiers: ('H1' | 'H2')[] }[] = [
     { tiers: ['H1', 'H2'] },
@@ -208,39 +292,96 @@ export function suggest(
     { tiers: [] },
   ];
 
+  /*
+   * The layer bounds are a REQUIREMENT of the vibe, not a preference: "summer
+   * isn't layered, winter is" is the definition of both. They used to be only
+   * scored, and once the variety rule below capped the few winter-suitable
+   * pieces, the best outfit that reused nothing was a single-layer summer
+   * dress -- which then appeared under "winter". Enforced at H1: held unless
+   * the closet genuinely cannot meet it, and captioned when it cannot.
+   */
+  const layersOk = (items: Garment[]) => {
+    const n = torsoLayers(items);
+    return n >= vibe.layers.min && n <= vibe.layers.max;
+  };
+
+  /*
+   * The warmth FLOOR is a requirement too, but deliberately not the ceiling.
+   * Too cold is a failure; too warm is a preference -- you can take a layer
+   * off, not add one you left at home. Enforcing summer's 3.5 ceiling would
+   * ban tee + jeans + sandals (3.7). Enforcing winter's 6.5 floor stops a
+   * dress and a denim jacket (5.0) appearing under "winter". Summer's floor is
+   * 0, so this changes nothing there.
+   */
+  const warmEnough = (items: Garment[]) => outfitWarmth(items) >= vibe.warmth.min;
+  const fitsVibe = (items: Garment[]) => layersOk(items) && warmEnough(items);
+
   for (const rung of rungs) {
-    const { kept, applied } = applyVetoes(available, vibe, rung.tiers);
-    const dropped = (vibe.veto ?? [])
-      .filter((v) => !rung.tiers.includes(v.tier))
-      .map((v) => v.describe);
+    const pick = picker(pools(withoutVetoed(available, vibe, rung.tiers), vibe), locked);
+    const enforceLayers = rung.tiers.includes('H1');
 
-    const p = pools(kept, vibe);
-    const scored: ScoredOutfit[] = [];
-    let seen = 0;
+    // Only rules that were lifted at this rung AND that this outfit actually
+    // breaks. The old list was every veto lifted by the tier, whether or not
+    // anything in the outfit needed it -- so a perfectly ordinary outfit was
+    // captioned "bent a rule to get here".
+    const relaxedFor = (items: Garment[]) => {
+      const bent = (vibe.veto ?? [])
+        .filter((v) => !rung.tiers.includes(v.tier) && items.some(v.test))
+        .map((v) => v.describe);
+      if (!layersOk(items)) {
+        bent.push(
+          torsoLayers(items) < vibe.layers.min
+            ? 'fewer layers than this usually wants'
+            : 'more layers than this usually wants',
+        );
+      }
+      if (!warmEnough(items)) bent.push('cooler than this usually wants');
+      return bent;
+    };
 
-    for (const combo of combinations(p, options.locked ?? [])) {
-      if (++seen > MAX_COMBINATIONS) break;
-      if (!isValid(combo)) continue;
+    const score = (items: Garment[]): ScoredOutfit => {
+      const { score: s, terms } = scoreOutfit(items, vibe);
+      return { items, score: s, terms, why: '', relaxed: relaxedFor(items) };
+    };
 
-      const { score, terms } = scoreOutfit(combo, vibe);
-      scored.push({ items: combo, score, terms, why: '', relaxed: dropped });
+    // Stage 1.
+    const coreList: ScoredOutfit[] = [];
+    for (const c of cores(pick, locked)) if (isValid(c)) coreList.push(score(c));
+
+    // Stage 2, skipped outright when the vibe allows no second layer.
+    const layeredList: ScoredOutfit[] = [];
+    if (vibe.layers.max > 1) {
+      const byAnchor = new Map<string, ScoredOutfit[]>();
+      for (const c of coreList) {
+        const k = anchorOf(c.items);
+        byAnchor.set(k, [...(byAnchor.get(k) ?? []), c]);
+      }
+      for (const group of byAnchor.values()) {
+        group.sort((a, b) => b.score - a.score);
+        for (const c of group.slice(0, CORES_PER_ANCHOR)) {
+          for (const l of layered(c.items, pick)) if (isValid(l)) layeredList.push(score(l));
+        }
+      }
     }
 
-    scored.sort((a, b) => b.score - a.score);
-    const chosen = distinct(scored, want);
+    const ranked = [...coreList, ...layeredList]
+      .filter((o) => lockedIds.every((id) => o.items.some((g) => g.id === id)))
+      .filter((o) => !enforceLayers || fitsVibe(o.items))
+      .sort((a, b) => b.score - a.score);
+    const chosen = select(ranked, want);
 
-    // Stop at the first rung that produces a decent set. Only keep relaxing
-    // if we genuinely cannot fill the request.
+    // Stop at the first rung that yields three. Relaxing further only trades
+    // honesty for volume: a closet that can manage three good outfits gets
+    // three and a note on what is missing, not five padded out with bent rules.
     if (chosen.length >= Math.min(3, want) || rung === rungs[rungs.length - 1]) {
       return {
         outfits: chosen.map((o) => ({ ...o, why: explain(o.terms, vibe, o.relaxed) })),
-        gaps: chosen.length < want ? closetGaps(available) : [],
+        gaps: chosen.length < want ? closetGaps(available, vibe) : [],
       };
     }
-    void applied;
   }
 
-  return { outfits: [], gaps: closetGaps(available) };
+  return { outfits: [], gaps: closetGaps(available, vibe) };
 }
 
 /** Why a specific combination is not allowed. Used by the outfit canvas. */

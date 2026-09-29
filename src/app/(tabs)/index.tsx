@@ -86,9 +86,15 @@ export default function ClosetScreen() {
 }
 
 function Cell({ item }: { item: ClosetItem }) {
+  const router = useRouter();
   const name = item.name ?? item.subcategory.replace(/_/g, ' ');
   return (
-    <View style={styles.cell}>
+    <Pressable
+      style={styles.cell}
+      onPress={() => router.push({ pathname: '/garment/[id]', params: { id: item.id } })}
+      accessibilityRole="button"
+      accessibilityLabel={name}
+      accessibilityHint="Opens this garment">
       {item.thumbUrl ? (
         <GarmentTile
           uri={item.thumbUrl}
@@ -106,7 +112,7 @@ function Cell({ item }: { item: ClosetItem }) {
       <ThemedText type="small" numberOfLines={1} style={styles.caption}>
         {name}
       </ThemedText>
-    </View>
+    </Pressable>
   );
 }
 

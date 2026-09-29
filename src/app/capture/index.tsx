@@ -1,11 +1,11 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { COACH_LINES, retakeMessage, scoreCapture } from '@/domain/quality/score';
-import type { QualityVerdict } from '@/domain/quality/types';
+import type { QualityVerdict, StillMetrics } from '@/domain/quality/types';
 import { analyzeStill } from '@/lib/imageIo';
 import { useCaptureStore } from '@/stores/captureStore';
 
@@ -34,17 +34,30 @@ export default function CaptureScreen() {
   const camera = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
-  const [rejected, setRejected] = useState<{ verdict: QualityVerdict; uri: string } | null>(null);
+  // Metrics are kept with the rejection so "Use it anyway" can proceed with
+  // what was already measured, instead of re-running the analysis unhandled.
+  const [rejected, setRejected] = useState<{
+    verdict: QualityVerdict;
+    uri: string;
+    metrics: StillMetrics;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [coach, setCoach] = useState(0);
   const shot = useCaptureStore((s) => s.shot);
 
+  // In a native stack this screen stays MOUNTED under review and tag. Without
+  // this, the camera session stayed open -- and the coaching timer kept firing
+  // -- for the whole upload, cutout, poll and tagging form.
+  const focused = useIsFocused();
+
   useEffect(() => {
+    if (!focused) return;
     const t = setInterval(() => setCoach((i) => (i + 1) % COACH_LINES.length), 4000);
     return () => clearInterval(t);
-  }, []);
+  }, [focused]);
 
   const proceed = useCallback(
-    (uri: string, verdict: QualityVerdict, metrics: Parameters<typeof shot>[1]) => {
+    (uri: string, verdict: QualityVerdict, metrics: StillMetrics) => {
       shot(uri, metrics, verdict);
       setRejected(null);
       router.push('/capture/review');
@@ -55,6 +68,7 @@ export default function CaptureScreen() {
   const onShutter = useCallback(async () => {
     if (busy) return;
     setBusy(true);
+    setError(null);
     try {
       const photo = await camera.current?.takePictureAsync({ quality: 0.9, skipProcessing: false });
       if (!photo?.uri) return;
@@ -65,9 +79,13 @@ export default function CaptureScreen() {
       const verdict = scoreCapture(metrics);
 
       if (verdict.pass) proceed(photo.uri, verdict, metrics);
-      else setRejected({ verdict, uri: photo.uri });
-    } catch {
-      // A capture that throws is not worth a modal; the shutter is right there.
+      else setRejected({ verdict, uri: photo.uri, metrics });
+    } catch (e) {
+      // This used to be `catch {}`. If analysis fails deterministically -- the
+      // ESM-only PNG decoder not resolving is the likely one -- every press
+      // spun for 200ms and did nothing, forever, with no clue why.
+      setRejected(null);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -97,7 +115,7 @@ export default function CaptureScreen() {
 
   return (
     <View style={styles.fill}>
-      <CameraView ref={camera} style={styles.fill} facing="back" />
+      <CameraView ref={camera} style={styles.fill} facing="back" active={focused} />
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <Text style={styles.header}>Add a garment</Text>
@@ -129,14 +147,14 @@ export default function CaptureScreen() {
                     // Always available. The scorer does not know this hem is
                     // genuinely fringed, or that this is the only photo you
                     // will ever get of a borrowed coat.
-                    const r = rejected;
-                    setRejected(null);
-                    analyzeStill(r.uri).then((m) => proceed(r.uri, r.verdict, m));
+                    proceed(rejected.uri, rejected.verdict, rejected.metrics);
                   }}>
                   <Text style={styles.secondaryLabel}>Use it anyway</Text>
                 </Pressable>
               </View>
             </View>
+          ) : error ? (
+            <Text style={styles.error}>Could not read that photo: {error}</Text>
           ) : (
             <Text style={styles.coach}>{COACH_LINES[coach]}</Text>
           )}
@@ -185,6 +203,7 @@ const styles = StyleSheet.create({
   br: { bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3 },
 
   bottom: { paddingBottom: 24, paddingHorizontal: 16, gap: 16, alignItems: 'center' },
+  error: { color: '#FFB4A9', fontSize: 14, textAlign: 'center', lineHeight: 20 },
   coach: {
     color: 'rgba(255,255,255,0.9)',
     fontSize: 14,

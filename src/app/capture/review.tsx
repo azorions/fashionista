@@ -8,27 +8,40 @@ import { ThemedView } from '@/components/themed-view';
 import { GarmentTile } from '@/components/garment-tile';
 import { Spacing } from '@/constants/theme';
 import { retakeMessage } from '@/domain/quality/score';
-import { T } from '@/domain/quality/thresholds';
-import { awaitProcessed, discardCapture, startCapture } from '@/lib/capturePipeline';
+import { discardCapture, markKeptDespiteWarning, runCapture } from '@/lib/capturePipeline';
 import { useCaptureStore } from '@/stores/captureStore';
 
 /**
  * Upload, wait for the cutout, and show the result on the real card.
  *
- * The score decides how loudly we mention it, and the bands matter more than
- * their exact values:
- *   >= GOOD   keep silently. Interrupting a good capture trains people to
- *             ignore the prompt.
- *   PASS..GOOD  keep by default, mention it once.
- *   < PASS    lead with retake, but never remove the choice — the scorer does
- *             not know this garment is genuinely fringed.
+ * The verdict decides how loudly we mention it:
+ *   pass, no warning   keep silently. Interrupting a good capture trains
+ *                      people to ignore the prompt.
+ *   pass, warning      keep by default, say what is off once.
+ *   fail               lead with retake, but never remove the choice -- the
+ *                      scorer does not know this garment is genuinely fringed.
+ *
+ * Driven by pass/warn rather than raw score, so hard failures (an empty or
+ * shredded mask) are treated as failures even if the blend scores well.
  */
 export default function ReviewScreen() {
   const router = useRouter();
-  const { localUri, metrics, verdict, itemId, tileUrl, maskVerdict, started, processed, reset } =
-    useCaptureStore();
+  const {
+    localUri,
+    metrics,
+    verdict,
+    itemId,
+    imageId,
+    tileUrl,
+    maskVerdict,
+    started,
+    processed,
+    reset,
+  } = useCaptureStore();
 
   const [error, setError] = useState<string | null>(null);
+  // Both exits are async; a second tap used to pop straight out of the flow.
+  const [leaving, setLeaving] = useState(false);
 
   // Derived, not stored: we are working exactly while there is no tile and no
   // error. Storing it would mean a setState inside the effect, which triggers
@@ -36,22 +49,21 @@ export default function ReviewScreen() {
   const working = !tileUrl && !error;
 
   useEffect(() => {
-    let cancelled = false;
     if (!localUri || !metrics || !verdict || tileUrl) return;
+    let cancelled = false;
 
-    (async () => {
-      try {
-        const ids = await startCapture(localUri, metrics, verdict);
-        if (cancelled) return;
-        started(ids.itemId, ids.imageId);
-
-        const done = await awaitProcessed(ids.imageId);
-        if (cancelled) return;
-        processed(done.tileUrl, done.maskVerdict);
-      } catch (e) {
+    // runCapture runs at most once per photo, so a re-run of this effect
+    // reattaches to the capture already in flight instead of starting another.
+    // The ids go into the store the moment the rows exist, even if this effect
+    // has since been cancelled -- that is what lets Retake clean up after a
+    // failure.
+    runCapture(localUri, metrics, verdict, (ids) => started(ids.itemId, ids.imageId))
+      .then((done) => {
+        if (!cancelled) processed(done.tileUrl, done.maskVerdict);
+      })
+      .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
+      });
 
     return () => {
       cancelled = true;
@@ -59,9 +71,28 @@ export default function ReviewScreen() {
   }, [localUri, metrics, verdict, tileUrl, started, processed]);
 
   async function retake() {
-    if (itemId) await discardCapture(itemId);
-    reset();
-    router.back();
+    if (leaving) return;
+    setLeaving(true);
+    try {
+      if (itemId) await discardCapture(itemId);
+      router.back();
+      // After navigating, so this screen does not flash "Nothing to review"
+      // during the pop animation.
+      reset();
+    } catch (e) {
+      setLeaving(false);
+      setError(`Could not discard that photo: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  function keep() {
+    if (leaving) return;
+    // Keeping a cutout the scorer flagged is the calibration signal. Logged
+    // best-effort: telemetry must never block the user from moving on.
+    if (imageId && maskVerdict && (!maskVerdict.pass || maskVerdict.warn)) {
+      markKeptDespiteWarning(imageId).catch(() => {});
+    }
+    router.push('/capture/tag');
   }
 
   if (!localUri) {
@@ -72,13 +103,14 @@ export default function ReviewScreen() {
     );
   }
 
-  const score = maskVerdict?.score ?? 0;
+  const failed = !!maskVerdict && !maskVerdict.pass;
+  // The specific issue, not a generic line: a tight crop used to be told "the
+  // edges are a bit rough", which is not what was wrong with it.
   const note =
-    !maskVerdict || score >= T.GATE_GOOD
+    !maskVerdict || (maskVerdict.pass && !maskVerdict.warn)
       ? null
-      : score >= T.GATE_PASS
-        ? 'Saved. The edges are a bit rough — retake?'
-        : (retakeMessage(maskVerdict.primaryIssue) ?? 'This one came out rough.');
+      : (retakeMessage(maskVerdict.primaryIssue) ??
+        (failed ? 'This one came out rough.' : 'The edges are a bit rough — retake?'));
 
   return (
     <ThemedView style={styles.page}>
@@ -95,7 +127,7 @@ export default function ReviewScreen() {
           // 'top' is not a placeholder: at review time the item is still the
           // 'unknown' subcategory, whose seeded category is 'top'. Tagging
           // happens on the next screen, and the grid renders the real one.
-          <GarmentTile uri={tileUrl} category="top" dimmed={score < T.GATE_PASS} />
+          <GarmentTile uri={tileUrl} category="top" dimmed={failed} />
         ) : (
           <Image source={{ uri: localUri }} style={styles.pendingImage} contentFit="contain" />
         )}
@@ -112,13 +144,18 @@ export default function ReviewScreen() {
       )}
 
       <View style={styles.actions}>
-        <Pressable style={styles.secondary} onPress={retake} disabled={working}>
+        <Pressable
+          style={[styles.secondary, leaving && styles.dim]}
+          onPress={retake}
+          disabled={working || leaving}
+          accessibilityRole="button">
           <ThemedText>Retake</ThemedText>
         </Pressable>
         <Pressable
-          style={[styles.primary, working && styles.dim]}
-          disabled={working || !!error}
-          onPress={() => router.push('/capture/tag')}>
+          style={[styles.primary, (working || leaving) && styles.dim]}
+          disabled={working || leaving || !!error}
+          onPress={keep}
+          accessibilityRole="button">
           <ThemedText style={styles.primaryLabel}>Keep</ThemedText>
         </Pressable>
       </View>

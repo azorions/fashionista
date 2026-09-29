@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  HARD_FAIL,
   blocksShutter,
   primaryIssue,
   retakeMessage,
@@ -48,8 +49,21 @@ describe('scoreCapture', () => {
   it('flags a dark photo and fails it', () => {
     const v = scoreCapture(still({ luma: 30 }));
     expect(v.issues).toContain('too_dark');
-    expect(v.score).toBeLessThan(goodStill.lapVar);
     expect(v.primaryIssue).toBe('too_dark');
+    // This line used to read `expect(v.score).toBeLessThan(goodStill.lapVar)`
+    // -- a 0..100 score against a Laplacian variance of 200, true for every
+    // possible input. It hid the fact that this photo PASSED the gate.
+    expect(v.pass).toBe(false);
+  });
+
+  it('fails a dark photo even when it is perfectly sharp — the common case', () => {
+    // A still phone in a dim room: sharpness maxes out, exposure is terrible.
+    // Sharpness carries 0.55 of the score, so on score alone this lands around
+    // 68 and passes. It must not.
+    const v = scoreCapture(still({ luma: 30, lapVar: 400 }));
+    expect(v.score).toBeGreaterThanOrEqual(T.GATE_PASS); // the score alone would pass it...
+    expect(v.pass).toBe(false); // ...the hard failure does not
+    expect(v.warn).toBe(false);
   });
 
   it('flags a blurry photo', () => {
@@ -58,9 +72,16 @@ describe('scoreCapture', () => {
     expect(v.pass).toBe(false);
   });
 
-  it('flags an overexposed photo', () => {
+  it('flags an overexposed photo and fails it', () => {
     const v = scoreCapture(still({ luma: 240 }));
     expect(v.issues).toContain('too_bright');
+    expect(v.pass).toBe(false);
+  });
+
+  it('only warns on clipping — a white shirt legitimately clips a little', () => {
+    const v = scoreCapture(still({ clipHigh: 0.2 }));
+    expect(v.issues).toContain('clipped');
+    expect(HARD_FAIL).not.toContain('clipped');
   });
 
   it('flags clipping independently of overall brightness', () => {
@@ -76,12 +97,16 @@ describe('scoreCapture', () => {
   });
 
   it('marks the band between PASS and GOOD as a warning, not a failure', () => {
-    // Slightly soft: passes, but worth offering a retake.
-    const v = scoreCapture(still({ lapVar: 95, luma: 100 }));
-    if (v.score >= T.GATE_PASS && v.score < T.GATE_GOOD) {
-      expect(v.pass).toBe(true);
-      expect(v.warn).toBe(true);
-    }
+    // Built to land in the band deterministically. The old version wrapped its
+    // assertions in an `if` identical to the implementation, so a score
+    // outside the band ran zero assertions and still passed.
+    // lapVar 90 -> sharpness 0.5; luma 140 -> exposure 1; tiny clip -> ~0.9.
+    const v = scoreCapture(still({ lapVar: 90, luma: 140, clipLow: 0.01, clipHigh: 0.01 }));
+    expect(v.score).toBeGreaterThanOrEqual(T.GATE_PASS);
+    expect(v.score).toBeLessThan(T.GATE_GOOD);
+    expect(v.pass).toBe(true);
+    expect(v.warn).toBe(true);
+    expect(v.issues).toEqual([]);
   });
 
   it('never returns a score outside 0..100', () => {

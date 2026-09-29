@@ -68,10 +68,16 @@ export default function TagScreen() {
     setError(null);
     try {
       await saveTags(itemId, { category, subcategory: sub.code, name: name || undefined }, sub);
-      await qc.invalidateQueries({ queryKey: ['closet'] });
+      // Not awaited: the write has already succeeded. Awaiting held the button
+      // spinner through a full closet refetch, re-signing every thumbnail.
+      qc.invalidateQueries({ queryKey: ['closet'] });
+      // One POP_TO back to the closet. dismissAll() only popped the NEAREST
+      // stack -- the capture flow -- which refocused the camera before the
+      // follow-up replace('/') ran.
+      router.dismissTo('/');
+      // After navigating, so the screens underneath do not re-render into
+      // their empty states during the transition.
       reset();
-      router.dismissAll();
-      router.replace('/');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

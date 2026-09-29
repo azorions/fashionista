@@ -6,15 +6,19 @@
  * white t-shirt legitimately has low edge energy and a naive threshold will
  * call it blurry.
  *
- * Two guards make that survivable:
- *   1. Measure sharpness only inside the framing guide (live) and inside the
- *      mask bounding box (server) — background texture is what usually rescues
- *      or ruins the number.
- *   2. The hidden calibration screen logs {metrics, verdict, didUserKeepIt} to
- *      the quality_calibration table from day one. Refit after ~100 real photos.
+ * What makes that survivable today:
+ *   - Every capture's metrics, verdict and whether the user kept it despite a
+ *     warning are stored on its item_images row (still_metrics, mask_metrics,
+ *     issues, kept_despite_warning). Refit these numbers against real rows once
+ *     there are ~100 of them.
+ *   - "Use it anyway" stays on every rejection, so a bad threshold can annoy
+ *     the user but never block them.
  *
- * Until then, "Use it anyway" stays on every rejection, so a bad threshold can
- * annoy the user but can never block them.
+ * NOT done yet, despite an earlier version of this comment claiming it was:
+ * sharpness is measured over the WHOLE frame, not just inside the framing
+ * guide or the garment's bounding box. A textured floor can therefore make a
+ * soft photo read as sharp. Restricting laplacianVariance to a region is the
+ * first thing to try if calibration shows blur verdicts are unreliable.
  */
 export const T = {
   live: {

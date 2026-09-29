@@ -29,7 +29,11 @@ async function signMany(paths: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (paths.length === 0) return out;
 
-  const { data } = await supabase.storage.from('wardrobe').createSignedUrls(paths, 3600);
+  const { data, error } = await supabase.storage.from('wardrobe').createSignedUrls(paths, 3600);
+  // This error used to be discarded. One failure -- an expired session, a
+  // missing storage policy -- left every thumbUrl null, so the whole closet
+  // rendered as spinners with no error state reachable. Fail the query.
+  if (error) throw error;
   for (const entry of data ?? []) {
     if (entry.path && entry.signedUrl) out.set(entry.path, entry.signedUrl);
   }
@@ -65,13 +69,16 @@ export function useGarment(id: string | null) {
   return useQuery({
     queryKey: ['garment', id],
     enabled: !!id,
-    queryFn: async () => {
+    queryFn: async (): Promise<ClosetItem | null> => {
+      // maybeSingle: an item that has been deleted is a normal outcome here,
+      // not an error. .single() threw PGRST116 at the tag screen instead.
       const { data, error } = await supabase
         .from('wardrobe_items')
         .select(SELECT)
         .eq('id', id!)
-        .single();
+        .maybeSingle();
       if (error) throw error;
+      if (!data) return null;
       return (await toClosetItems([data as unknown as Row]))[0];
     },
   });

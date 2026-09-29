@@ -41,6 +41,37 @@ export function primaryIssue(issues: CaptureIssue[]): CaptureIssue | undefined {
 }
 
 /**
+ * Issues that make a photo unusable however well everything else scores.
+ *
+ * The score is a weighted blend and sharpness carries 0.55 of it, so a
+ * perfectly sharp photo taken in a dark room scored 68 and PASSED the gate.
+ * That is the most common bad photo there is -- and precisely what the capture
+ * guardrails exist to catch. A weighted average must not be able to outvote a
+ * threshold whose whole meaning is "below this, no".
+ *
+ * Failing the gate never discards anything: it decides whether we PROMPT, and
+ * the prompt always offers "Use it anyway".
+ */
+export const HARD_FAIL: readonly CaptureIssue[] = [
+  'too_dark',
+  'too_bright',
+  'blurry',
+  'mask_empty',
+  'mask_fragmented',
+];
+
+function verdictFor(score: number, issues: CaptureIssue[]): QualityVerdict {
+  const pass = score >= T.GATE_PASS && !issues.some((i) => HARD_FAIL.includes(i));
+  return {
+    score,
+    pass,
+    warn: pass && score < T.GATE_GOOD,
+    issues,
+    primaryIssue: primaryIssue(issues),
+  };
+}
+
+/**
  * Post-shutter, pre-upload. Rejecting here saves an upload and an inference
  * call, and gets the user back to the camera in ~200ms with the garment still
  * in their hands.
@@ -66,14 +97,7 @@ export function scoreCapture(m: StillMetrics): QualityVerdict {
   if (m.clipLow > T.still.clipLowMax || m.clipHigh > T.still.clipHighMax) issues.push('clipped');
 
   const score = Math.round(100 * (0.55 * sharp + 0.3 * expo + 0.15 * clip));
-
-  return {
-    score,
-    pass: score >= T.GATE_PASS,
-    warn: score >= T.GATE_PASS && score < T.GATE_GOOD,
-    issues,
-    primaryIssue: primaryIssue(issues),
-  };
+  return verdictFor(score, issues);
 }
 
 /**
@@ -109,7 +133,10 @@ export function scoreMaskQuality(m: MaskMetrics): QualityVerdict {
   const issues: CaptureIssue[] = [];
 
   if (m.fgRatio < T.mask.fgRatioMin) issues.push('mask_empty');
-  if (m.fgRatio > T.mask.fgRatioMax) issues.push('mask_fragmented');
+  // Filling the frame is framing, not fragmentation: the cutout is intact,
+  // the garment just has no air around it. Reporting it as mask_fragmented
+  // told the user "the background confused us" about a clean cutout.
+  if (m.fgRatio > T.mask.fgRatioMax) issues.push('too_large');
   if (m.largestComponent < T.mask.largestComponentMin || m.components > T.mask.componentsMax) {
     issues.push('mask_fragmented');
   }
@@ -127,14 +154,7 @@ export function scoreMaskQuality(m: MaskMetrics): QualityVerdict {
   const score = Math.round(
     100 * (0.35 * coverage + 0.3 * cohesion + 0.2 * edges + 0.15 * certainty)
   );
-
-  return {
-    score,
-    pass: score >= T.GATE_PASS,
-    warn: score >= T.GATE_PASS && score < T.GATE_GOOD,
-    issues: [...new Set(issues)],
-    primaryIssue: primaryIssue(issues),
-  };
+  return verdictFor(score, issues);
 }
 
 /**

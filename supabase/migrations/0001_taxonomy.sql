@@ -74,7 +74,16 @@ create table public.garment_subcategory (
   default_silhouette  silhouette    not null default 'straight',
   default_length      garment_length not null default 'n_a',
   default_rise        rise          not null default 'n_a',
-  sort                smallint not null default 100
+  sort                smallint not null default 100,
+  -- What a garment of this type is usually made of and looks like. Without
+  -- these, every real garment had no materials, a solid pattern and a matte
+  -- finish, and every material, pattern and shine rule in the vibes was dead.
+  -- They are only starting points: the capture form's "More details" lets the
+  -- user correct them item by item, which matters most for pattern and shine.
+  default_materials     material[]    not null default '{}',
+  default_pattern       pattern       not null default 'solid',
+  default_pattern_scale pattern_scale not null default 'none',
+  default_sheen         sheen         not null default 'matte'
 );
 
 comment on table public.garment_subcategory is
@@ -83,60 +92,61 @@ comment on table public.garment_subcategory is
 insert into public.garment_subcategory
   (code, label, category, default_body_zone, default_layer_role, alt_layer_roles,
    default_warmth, default_breathability, default_bulk, default_formality,
-   default_silhouette, default_length, default_rise, sort)
+   default_silhouette, default_length, default_rise, sort,
+   default_materials, default_pattern, default_pattern_scale, default_sheen)
 values
   -- tops
-  ('tank',        'Tank top',      'top',  'torso', 'base', '{}',        1, 5, 1, 1, 'fitted',   'hip',  'n_a', 10),
-  ('tee',         'T-shirt',       'top',  'torso', 'base', '{}',        2, 4, 2, 2, 'straight', 'hip',  'n_a', 11),
-  ('crop_top',    'Crop top',      'top',  'torso', 'base', '{}',        1, 4, 1, 2, 'fitted',   'crop', 'n_a', 12),
-  ('long_sleeve', 'Long sleeve',   'top',  'torso', 'base', '{mid}',     3, 3, 2, 2, 'straight', 'hip',  'n_a', 13),
-  ('shirt',       'Shirt',         'top',  'torso', 'base', '{mid}',     2, 4, 2, 3, 'straight', 'hip',  'n_a', 14),
-  ('flannel',     'Flannel shirt', 'top',  'torso', 'base', '{mid,outer}', 3, 3, 3, 2, 'relaxed', 'hip', 'n_a', 15),
-  ('blouse',      'Blouse',        'top',  'torso', 'base', '{}',        2, 4, 1, 4, 'relaxed',  'hip',  'n_a', 16),
-  ('polo',        'Polo',          'top',  'torso', 'base', '{}',        2, 4, 2, 3, 'straight', 'hip',  'n_a', 17),
-  ('sweater',     'Sweater',       'top',  'torso', 'mid',  '{base}',    4, 2, 4, 3, 'relaxed',  'hip',  'n_a', 20),
-  ('cardigan',    'Cardigan',      'top',  'torso', 'mid',  '{outer}',   3, 3, 3, 3, 'relaxed',  'hip',  'n_a', 21),
-  ('hoodie',      'Hoodie',        'top',  'torso', 'mid',  '{outer}',   4, 2, 4, 1, 'oversized','hip',  'n_a', 22),
-  ('sweatshirt',  'Sweatshirt',    'top',  'torso', 'mid',  '{base}',    3, 2, 3, 1, 'relaxed',  'hip',  'n_a', 23),
-  ('vest',        'Vest',          'top',  'torso', 'mid',  '{}',        2, 3, 2, 3, 'fitted',   'hip',  'n_a', 24),
+  ('tank',        'Tank top',      'top',  'torso', 'base', '{}',        1, 5, 1, 1, 'fitted',   'hip',  'n_a', 10, '{cotton}', 'solid', 'none', 'matte'),
+  ('tee',         'T-shirt',       'top',  'torso', 'base', '{}',        2, 4, 2, 2, 'straight', 'hip',  'n_a', 11, '{cotton}', 'solid', 'none', 'matte'),
+  ('crop_top',    'Crop top',      'top',  'torso', 'base', '{}',        1, 4, 1, 2, 'fitted',   'crop', 'n_a', 12, '{cotton}', 'solid', 'none', 'matte'),
+  ('long_sleeve', 'Long sleeve',   'top',  'torso', 'base', '{mid}',     3, 3, 2, 2, 'straight', 'hip',  'n_a', 13, '{cotton}', 'solid', 'none', 'matte'),
+  ('shirt',       'Shirt',         'top',  'torso', 'base', '{mid}',     2, 4, 2, 3, 'straight', 'hip',  'n_a', 14, '{cotton}', 'solid', 'none', 'matte'),
+  ('flannel',     'Flannel shirt', 'top',  'torso', 'base', '{mid,outer}', 3, 3, 3, 2, 'relaxed', 'hip', 'n_a', 15, '{cotton}', 'check', 'medium', 'matte'),
+  ('blouse',      'Blouse',        'top',  'torso', 'base', '{}',        2, 4, 1, 4, 'relaxed',  'hip',  'n_a', 16, '{synthetic}', 'solid', 'none', 'subtle'),
+  ('polo',        'Polo',          'top',  'torso', 'base', '{}',        2, 4, 2, 3, 'straight', 'hip',  'n_a', 17, '{cotton}', 'solid', 'none', 'matte'),
+  ('sweater',     'Sweater',       'top',  'torso', 'mid',  '{base}',    4, 2, 4, 3, 'relaxed',  'hip',  'n_a', 20, '{knit,wool}', 'solid', 'none', 'matte'),
+  ('cardigan',    'Cardigan',      'top',  'torso', 'mid',  '{outer}',   3, 3, 3, 3, 'relaxed',  'hip',  'n_a', 21, '{knit}', 'solid', 'none', 'matte'),
+  ('hoodie',      'Hoodie',        'top',  'torso', 'mid',  '{outer}',   4, 2, 4, 1, 'oversized','hip',  'n_a', 22, '{cotton,fleece}', 'solid', 'none', 'matte'),
+  ('sweatshirt',  'Sweatshirt',    'top',  'torso', 'mid',  '{base}',    3, 2, 3, 1, 'relaxed',  'hip',  'n_a', 23, '{cotton,fleece}', 'solid', 'none', 'matte'),
+  ('vest',        'Vest',          'top',  'torso', 'mid',  '{}',        2, 3, 2, 3, 'fitted',   'hip',  'n_a', 24, '{knit}', 'solid', 'none', 'matte'),
   -- bottoms
-  ('jeans',       'Jeans',         'bottom', 'legs', 'bottom', '{}',     3, 2, 3, 2, 'straight', 'full',  'mid',  30),
-  ('low_jeans',   'Low-rise jeans','bottom', 'legs', 'bottom', '{}',     3, 2, 3, 2, 'flared',   'full',  'low',  31),
-  ('trousers',    'Trousers',      'bottom', 'legs', 'bottom', '{}',     2, 3, 2, 4, 'straight', 'full',  'mid',  32),
-  ('chinos',      'Chinos',        'bottom', 'legs', 'bottom', '{}',     2, 3, 2, 3, 'straight', 'full',  'mid',  33),
-  ('shorts',      'Shorts',        'bottom', 'legs', 'bottom', '{}',     1, 5, 2, 1, 'straight', 'thigh', 'mid',  34),
-  ('skirt',       'Skirt',         'bottom', 'legs', 'bottom', '{}',     2, 4, 2, 3, 'straight', 'knee',  'mid',  35),
-  ('mini_skirt',  'Mini skirt',    'bottom', 'legs', 'bottom', '{}',     1, 4, 1, 2, 'fitted',   'thigh', 'low',  36),
-  ('joggers',     'Joggers',       'bottom', 'legs', 'bottom', '{}',     3, 2, 3, 1, 'relaxed',  'full',  'mid',  37),
-  ('leggings',    'Leggings',      'bottom', 'legs', 'bottom', '{}',     2, 3, 1, 1, 'fitted',   'full',  'high', 38),
+  ('jeans',       'Jeans',         'bottom', 'legs', 'bottom', '{}',     3, 2, 3, 2, 'straight', 'full',  'mid',  30, '{denim}', 'solid', 'none', 'matte'),
+  ('low_jeans',   'Low-rise jeans','bottom', 'legs', 'bottom', '{}',     3, 2, 3, 2, 'flared',   'full',  'low',  31, '{denim}', 'solid', 'none', 'matte'),
+  ('trousers',    'Trousers',      'bottom', 'legs', 'bottom', '{}',     2, 3, 2, 4, 'straight', 'full',  'mid',  32, '{wool}', 'solid', 'none', 'matte'),
+  ('chinos',      'Chinos',        'bottom', 'legs', 'bottom', '{}',     2, 3, 2, 3, 'straight', 'full',  'mid',  33, '{cotton}', 'solid', 'none', 'matte'),
+  ('shorts',      'Shorts',        'bottom', 'legs', 'bottom', '{}',     1, 5, 2, 1, 'straight', 'thigh', 'mid',  34, '{cotton}', 'solid', 'none', 'matte'),
+  ('skirt',       'Skirt',         'bottom', 'legs', 'bottom', '{}',     2, 4, 2, 3, 'straight', 'knee',  'mid',  35, '{cotton}', 'solid', 'none', 'matte'),
+  ('mini_skirt',  'Mini skirt',    'bottom', 'legs', 'bottom', '{}',     1, 4, 1, 2, 'fitted',   'thigh', 'low',  36, '{cotton}', 'solid', 'none', 'matte'),
+  ('joggers',     'Joggers',       'bottom', 'legs', 'bottom', '{}',     3, 2, 3, 1, 'relaxed',  'full',  'mid',  37, '{cotton,fleece}', 'solid', 'none', 'matte'),
+  ('leggings',    'Leggings',      'bottom', 'legs', 'bottom', '{}',     2, 3, 1, 1, 'fitted',   'full',  'high', 38, '{synthetic}', 'solid', 'none', 'matte'),
   -- one-piece
-  ('dress',       'Dress',         'dress', 'full_body', 'full_body', '{}', 2, 4, 2, 4, 'straight', 'knee', 'n_a', 40),
-  ('maxi_dress',  'Maxi dress',    'dress', 'full_body', 'full_body', '{}', 2, 4, 2, 4, 'flared',   'ankle','n_a', 41),
-  ('jumpsuit',    'Jumpsuit',      'dress', 'full_body', 'full_body', '{}', 2, 3, 2, 3, 'straight', 'full', 'n_a', 42),
+  ('dress',       'Dress',         'dress', 'full_body', 'full_body', '{}', 2, 4, 2, 4, 'straight', 'knee', 'n_a', 40, '{cotton}', 'solid', 'none', 'matte'),
+  ('maxi_dress',  'Maxi dress',    'dress', 'full_body', 'full_body', '{}', 2, 4, 2, 4, 'flared',   'ankle','n_a', 41, '{cotton}', 'solid', 'none', 'matte'),
+  ('jumpsuit',    'Jumpsuit',      'dress', 'full_body', 'full_body', '{}', 2, 3, 2, 3, 'straight', 'full', 'n_a', 42, '{cotton}', 'solid', 'none', 'matte'),
   -- outerwear
-  ('denim_jacket','Denim jacket',  'outerwear', 'torso', 'outer', '{mid}', 3, 2, 3, 2, 'straight', 'hip', 'n_a', 50),
-  ('bomber',      'Bomber jacket', 'outerwear', 'torso', 'outer', '{}',    3, 2, 3, 2, 'relaxed',  'hip', 'n_a', 51),
-  ('leather_jacket','Leather jacket','outerwear','torso','outer', '{}',    3, 1, 3, 3, 'fitted',   'hip', 'n_a', 52),
-  ('blazer',      'Blazer',        'outerwear', 'torso', 'outer', '{mid}', 3, 3, 2, 5, 'fitted',   'hip', 'n_a', 53),
-  ('raincoat',    'Raincoat',      'outerwear', 'torso', 'outer', '{}',    3, 1, 3, 2, 'straight', 'thigh','n_a', 54),
-  ('wool_coat',   'Wool coat',     'outerwear', 'torso', 'outer', '{}',    5, 1, 4, 4, 'straight', 'knee', 'n_a', 55),
-  ('puffer',      'Puffer jacket', 'outerwear', 'torso', 'outer', '{}',    5, 1, 5, 1, 'oversized','hip',  'n_a', 56),
-  ('parka',       'Parka',         'outerwear', 'torso', 'outer', '{}',    5, 1, 5, 1, 'oversized','thigh','n_a', 57),
+  ('denim_jacket','Denim jacket',  'outerwear', 'torso', 'outer', '{mid}', 3, 2, 3, 2, 'straight', 'hip', 'n_a', 50, '{denim}', 'solid', 'none', 'matte'),
+  ('bomber',      'Bomber jacket', 'outerwear', 'torso', 'outer', '{}',    3, 2, 3, 2, 'relaxed',  'hip', 'n_a', 51, '{synthetic}', 'solid', 'none', 'subtle'),
+  ('leather_jacket','Leather jacket','outerwear','torso','outer', '{}',    3, 1, 3, 3, 'fitted',   'hip', 'n_a', 52, '{leather}', 'solid', 'none', 'subtle'),
+  ('blazer',      'Blazer',        'outerwear', 'torso', 'outer', '{mid}', 3, 3, 2, 5, 'fitted',   'hip', 'n_a', 53, '{wool}', 'solid', 'none', 'matte'),
+  ('raincoat',    'Raincoat',      'outerwear', 'torso', 'outer', '{}',    3, 1, 3, 2, 'straight', 'thigh','n_a', 54, '{synthetic}', 'solid', 'none', 'subtle'),
+  ('wool_coat',   'Wool coat',     'outerwear', 'torso', 'outer', '{}',    5, 1, 4, 4, 'straight', 'knee', 'n_a', 55, '{wool}', 'solid', 'none', 'matte'),
+  ('puffer',      'Puffer jacket', 'outerwear', 'torso', 'outer', '{}',    5, 1, 5, 1, 'oversized','hip',  'n_a', 56, '{down,synthetic}', 'solid', 'none', 'subtle'),
+  ('parka',       'Parka',         'outerwear', 'torso', 'outer', '{}',    5, 1, 5, 1, 'oversized','thigh','n_a', 57, '{synthetic,down}', 'solid', 'none', 'matte'),
   -- footwear
-  ('sneakers',    'Sneakers',      'footwear', 'feet', 'footwear', '{}', 2, 3, 2, 2, 'straight', 'n_a', 'n_a', 60),
-  ('boots',       'Boots',         'footwear', 'feet', 'footwear', '{}', 4, 1, 3, 3, 'straight', 'n_a', 'n_a', 61),
-  ('sandals',     'Sandals',       'footwear', 'feet', 'footwear', '{}', 1, 5, 1, 2, 'straight', 'n_a', 'n_a', 62),
-  ('loafers',     'Loafers',       'footwear', 'feet', 'footwear', '{}', 2, 3, 2, 4, 'straight', 'n_a', 'n_a', 63),
-  ('heels',       'Heels',         'footwear', 'feet', 'footwear', '{}', 1, 3, 1, 5, 'fitted',   'n_a', 'n_a', 64),
+  ('sneakers',    'Sneakers',      'footwear', 'feet', 'footwear', '{}', 2, 3, 2, 2, 'straight', 'n_a', 'n_a', 60, '{synthetic}', 'solid', 'none', 'matte'),
+  ('boots',       'Boots',         'footwear', 'feet', 'footwear', '{}', 4, 1, 3, 3, 'straight', 'n_a', 'n_a', 61, '{leather}', 'solid', 'none', 'matte'),
+  ('sandals',     'Sandals',       'footwear', 'feet', 'footwear', '{}', 1, 5, 1, 2, 'straight', 'n_a', 'n_a', 62, '{leather}', 'solid', 'none', 'matte'),
+  ('loafers',     'Loafers',       'footwear', 'feet', 'footwear', '{}', 2, 3, 2, 4, 'straight', 'n_a', 'n_a', 63, '{leather}', 'solid', 'none', 'subtle'),
+  ('heels',       'Heels',         'footwear', 'feet', 'footwear', '{}', 1, 3, 1, 5, 'fitted',   'n_a', 'n_a', 64, '{leather}', 'solid', 'none', 'subtle'),
   -- accessories
-  ('bag',         'Bag',           'accessory', 'carried', 'accessory', '{}', 1, 3, 2, 3, 'straight','n_a','n_a', 70),
-  ('hat',         'Hat',           'accessory', 'head',    'accessory', '{}', 2, 3, 2, 2, 'straight','n_a','n_a', 71),
-  ('scarf',       'Scarf',         'accessory', 'neck',    'accessory', '{}', 4, 2, 3, 2, 'straight','n_a','n_a', 72),
-  ('belt',        'Belt',          'accessory', 'waist',   'accessory', '{}', 1, 3, 1, 3, 'straight','n_a','n_a', 73),
-  ('jewelry',     'Jewellery',     'accessory', 'neck',    'accessory', '{}', 1, 3, 1, 3, 'fitted',  'n_a','n_a', 74),
-  ('sunglasses',  'Sunglasses',    'accessory', 'head',    'accessory', '{}', 1, 3, 1, 2, 'straight','n_a','n_a', 75),
+  ('bag',         'Bag',           'accessory', 'carried', 'accessory', '{}', 1, 3, 2, 3, 'straight','n_a','n_a', 70, '{leather}', 'solid', 'none', 'matte'),
+  ('hat',         'Hat',           'accessory', 'head',    'accessory', '{}', 2, 3, 2, 2, 'straight','n_a','n_a', 71, '{cotton}', 'solid', 'none', 'matte'),
+  ('scarf',       'Scarf',         'accessory', 'neck',    'accessory', '{}', 4, 2, 3, 2, 'straight','n_a','n_a', 72, '{wool,knit}', 'solid', 'none', 'matte'),
+  ('belt',        'Belt',          'accessory', 'waist',   'accessory', '{}', 1, 3, 1, 3, 'straight','n_a','n_a', 73, '{leather}', 'solid', 'none', 'matte'),
+  ('jewelry',     'Jewellery',     'accessory', 'neck',    'accessory', '{}', 1, 3, 1, 3, 'fitted',  'n_a','n_a', 74, '{other}', 'solid', 'none', 'shiny'),
+  ('sunglasses',  'Sunglasses',    'accessory', 'head',    'accessory', '{}', 1, 3, 1, 2, 'straight','n_a','n_a', 75, '{synthetic}', 'solid', 'none', 'subtle'),
   -- the fallback the tagger falls back to, so capture never hard-fails
-  ('unknown',     'Unsorted',      'top', 'torso', 'base', '{}', 2, 3, 2, 2, 'straight', 'n_a', 'n_a', 999);
+  ('unknown',     'Unsorted',      'top', 'torso', 'base', '{}', 2, 3, 2, 2, 'straight', 'n_a', 'n_a', 999, '{}', 'solid', 'none', 'matte');
 
 -- ---------------------------------------------------------------------------
 -- Style tags: open vocabulary, weighted per garment. See item_style_tags.
@@ -158,7 +168,8 @@ insert into public.style_tag (code, label, sort) values
   ('romantic',     'Romantic',     70),
   ('edgy',         'Edgy',         80),
   ('preppy',       'Preppy',       90),
-  ('vintage',      'Vintage',     100);
+  ('vintage',      'Vintage',     100),
+  ('cozy',         'Cozy',        110);
 
 -- Reference data: readable by anyone signed in, writable only via migrations.
 alter table public.garment_subcategory enable row level security;

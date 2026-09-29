@@ -119,9 +119,23 @@ describe('GarmentTagsSchema', () => {
   });
 });
 
-describe('the M1 form is three fields', () => {
-  it('asks only for category, subcategory and an optional name', () => {
-    expect(Object.keys(GarmentFormSchema.shape).sort()).toEqual(['category', 'name', 'subcategory']);
+describe('the capture form requires two fields', () => {
+  it('requires only category and subcategory; everything else is optional', () => {
+    const shape = GarmentFormSchema.shape;
+    const required = Object.entries(shape)
+      .filter(([, field]) => !field.safeParse(undefined).success)
+      .map(([k]) => k)
+      .sort();
+    expect(required).toEqual(['category', 'subcategory']);
+  });
+
+  it('gives the optional details NO defaults, so an untouched field is absent', () => {
+    // A default here would be sent on every save and overwrite the
+    // subcategory's value -- the whole point of the details being optional.
+    const parsed = GarmentFormSchema.parse({ category: 'top', subcategory: 'sweater' });
+    for (const k of ['pattern', 'patternScale', 'materials', 'sheen', 'styleTags'] as const) {
+      expect(parsed[k], k).toBeUndefined();
+    }
   });
 
   it('parses without any of the attribute fields present', () => {
@@ -141,7 +155,40 @@ describe('applyDefaults', () => {
     silhouette: 'straight',
     length: 'full',
     rise: 'mid',
+    materials: ['denim'],
+    pattern: 'solid',
+    patternScale: 'none',
+    sheen: 'matte',
   };
+
+  it('keeps the subcategory defaults when no details were entered', () => {
+    // The bug this guards: spreading {materials: undefined} over the defaults,
+    // then letting the schema default it to [] -- jeans would stop being denim.
+    const g = applyDefaults(
+      { category: 'bottom', subcategory: 'jeans', materials: undefined, pattern: undefined },
+      defaults
+    );
+    expect(g.materials).toEqual(['denim']);
+    expect(g.pattern).toBe('solid');
+  });
+
+  it('lets entered details override the defaults', () => {
+    const g = applyDefaults(
+      {
+        category: 'bottom',
+        subcategory: 'jeans',
+        pattern: 'stripe',
+        patternScale: 'small',
+        sheen: 'shiny',
+        styleTags: [{ tag: 'y2k', weight: 1 }],
+      },
+      defaults
+    );
+    expect(g.pattern).toBe('stripe');
+    expect(g.sheen).toBe('shiny');
+    expect(g.materials).toEqual(['denim']);
+    expect(g.styleTags).toEqual([{ tag: 'y2k', weight: 1 }]);
+  });
 
   it('produces a complete garment from a three-field form', () => {
     const g = applyDefaults({ category: 'bottom', subcategory: 'jeans' }, defaults);

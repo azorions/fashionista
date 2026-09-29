@@ -1,5 +1,5 @@
 import type { Swatch } from '../color/palette';
-import type { GarmentTags } from '../tagging/schema';
+import { STYLE_TAGS, type GarmentTags, type StyleTag, type SubcategoryDefaults } from '../tagging/schema';
 import type { Garment } from '../styling/types';
 
 /**
@@ -67,13 +67,26 @@ export function tagsToRow(t: GarmentTags) {
 }
 
 /**
+ * A wardrobe row with its style tags embedded by PostgREST
+ * (`tags:item_style_tags(tag_code, weight)`). Kept separate from
+ * WardrobeItemRow, which mirrors the table itself and is checked against the
+ * migration column by column.
+ */
+export type WardrobeItemWithTags = WardrobeItemRow & {
+  tags?: { tag_code: string; weight: number | string }[] | null;
+};
+
+const KNOWN_TAGS = new Set<string>(STYLE_TAGS);
+
+/**
  * A row as the styling engine wants it.
  *
- * styleTags comes back empty here: it lives in the item_style_tags junction
- * and nothing reads it until M2, so joining it on every closet render would be
- * cost for no benefit today.
+ * Style tags come from the embedded junction rows. This used to hardcode [],
+ * so every vibe's tag weights scored zero for every real garment. Unknown tag
+ * codes are dropped rather than trusted, and numeric(3,2) weights -- which
+ * PostgREST may send as strings -- are coerced.
  */
-export function rowToGarment(row: WardrobeItemRow): Garment {
+export function rowToGarment(row: WardrobeItemWithTags): Garment {
   return {
     id: row.id,
     name: row.name ?? undefined,
@@ -93,7 +106,9 @@ export function rowToGarment(row: WardrobeItemRow): Garment {
     patternScale: row.pattern_scale,
     materials: row.materials ?? [],
     sheen: row.sheen,
-    styleTags: [],
+    styleTags: (row.tags ?? [])
+      .filter((t) => KNOWN_TAGS.has(t.tag_code))
+      .map((t) => ({ tag: t.tag_code as StyleTag, weight: Number(t.weight) })),
     palette: row.palette ?? [],
     confidence: row.confidence as Garment['confidence'],
     lastWornAt: row.last_worn_at,
@@ -118,9 +133,13 @@ export interface SubcategoryRow {
   default_length: GarmentTags['length'];
   default_rise: GarmentTags['rise'];
   sort: number;
+  default_materials: GarmentTags['materials'];
+  default_pattern: GarmentTags['pattern'];
+  default_pattern_scale: GarmentTags['patternScale'];
+  default_sheen: GarmentTags['sheen'];
 }
 
-export function rowToDefaults(r: SubcategoryRow) {
+export function rowToDefaults(r: SubcategoryRow): SubcategoryDefaults {
   return {
     bodyZone: r.default_body_zone,
     layerRole: r.default_layer_role,
@@ -132,5 +151,9 @@ export function rowToDefaults(r: SubcategoryRow) {
     silhouette: r.default_silhouette,
     length: r.default_length,
     rise: r.default_rise,
+    materials: r.default_materials ?? [],
+    pattern: r.default_pattern ?? 'solid',
+    patternScale: r.default_pattern_scale ?? 'none',
+    sheen: r.default_sheen ?? 'matte',
   };
 }

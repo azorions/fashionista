@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { rowToGarment, type WardrobeItemRow } from '@/domain/garment/row';
+import { rowToGarment, type WardrobeItemWithTags } from '@/domain/garment/row';
 import { supabase } from '@/lib/supabase';
 import type { Garment } from '@/domain/styling/types';
 
@@ -18,11 +18,12 @@ export interface ClosetItem extends Garment {
   thumbUrl: string | null;
 }
 
-type Row = WardrobeItemRow & {
+type Row = WardrobeItemWithTags & {
   cover: { thumb_path: string | null; tile_path: string | null; status: string } | null;
 };
 
-const SELECT = '*, cover:item_images!wardrobe_items_cover_fk(thumb_path, tile_path, status)';
+const SELECT =
+  '*, cover:item_images!wardrobe_items_cover_fk(thumb_path, tile_path, status), tags:item_style_tags(tag_code, weight)';
 
 /** One round trip for N urls instead of N. */
 async function signMany(paths: string[]): Promise<Map<string, string>> {

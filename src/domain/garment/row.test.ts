@@ -170,7 +170,26 @@ describe('rowToGarment', () => {
     expect(g.palette).toEqual([]);
   });
 
-  it('leaves styleTags empty — they live in a junction nothing joins yet', () => {
+  it('maps embedded style tags, coercing numeric weights sent as strings', () => {
+    const g = rowToGarment({
+      ...fullRow,
+      tags: [
+        { tag_code: 'y2k', weight: '0.90' },
+        { tag_code: 'soft', weight: 0.4 },
+      ],
+    });
+    expect(g.styleTags).toEqual([
+      { tag: 'y2k', weight: 0.9 },
+      { tag: 'soft', weight: 0.4 },
+    ]);
+  });
+
+  it('drops unknown tag codes rather than trusting them', () => {
+    const g = rowToGarment({ ...fullRow, tags: [{ tag_code: 'not-a-tag', weight: 1 }] });
+    expect(g.styleTags).toEqual([]);
+  });
+
+  it('treats a row without embedded tags as having none', () => {
     expect(rowToGarment(fullRow).styleTags).toEqual([]);
   });
 });
@@ -191,7 +210,19 @@ describe('rowToDefaults', () => {
     default_length: 'hip',
     default_rise: 'n_a',
     sort: 15,
+    default_materials: ['cotton'],
+    default_pattern: 'check',
+    default_pattern_scale: 'medium',
+    default_sheen: 'matte',
   };
+
+  it('carries the material, pattern and finish defaults', () => {
+    const d = rowToDefaults(sub);
+    expect(d.materials).toEqual(['cotton']);
+    expect(d.pattern).toBe('check');
+    expect(d.patternScale).toBe('medium');
+    expect(d.sheen).toBe('matte');
+  });
 
   it('strips the default_ prefix onto the tag field names', () => {
     const d = rowToDefaults(sub);

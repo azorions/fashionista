@@ -105,6 +105,7 @@ export const STYLE_TAGS = [
   'edgy',
   'preppy',
   'vintage',
+  'cozy',
 ] as const;
 
 export type BodyZone = (typeof BODY_ZONES)[number];
@@ -174,16 +175,28 @@ export const GarmentTagsSchema = z.object({
 export type GarmentTags = z.infer<typeof GarmentTagsSchema>;
 
 /**
- * What the M1 tag form actually asks for.
+ * What the capture form asks for.
  *
- * Three fields. Everything else in GarmentTags comes from the subcategory's
- * defaults, and the colour comes free from the cutout's palette. Asking for
- * fifteen fields per garment is how a closet stays empty.
+ * Two required fields and an optional name, as before. Everything else comes
+ * from the subcategory's defaults -- unless the user opens "More details",
+ * which can override pattern, materials, finish and style tags.
+ *
+ * Built by hand rather than picked from GarmentTagsSchema on purpose: the
+ * picked detail fields carry zod DEFAULTS ('solid', []), so a form that never
+ * touched them would still send them and overwrite the subcategory's values.
+ * Here an untouched detail is simply absent.
  */
-export const GarmentFormSchema = GarmentTagsSchema.pick({
-  category: true,
-  subcategory: true,
-  name: true,
+export const GarmentFormSchema = z.object({
+  category: z.enum(CATEGORIES),
+  subcategory: z.string().min(1),
+  name: z.string().max(80).optional(),
+  pattern: z.enum(PATTERNS).optional(),
+  patternScale: z.enum(PATTERN_SCALES).optional(),
+  materials: z.array(z.enum(MATERIALS)).optional(),
+  sheen: z.enum(SHEENS).optional(),
+  styleTags: z
+    .array(z.object({ tag: z.enum(STYLE_TAGS), weight: z.number().min(0).max(1) }))
+    .optional(),
 });
 
 export type GarmentForm = z.infer<typeof GarmentFormSchema>;
@@ -201,9 +214,21 @@ export type SubcategoryDefaults = Pick<
   | 'silhouette'
   | 'length'
   | 'rise'
+  | 'materials'
+  | 'pattern'
+  | 'patternScale'
+  | 'sheen'
 >;
 
-/** Merge a form submission with its subcategory defaults into a full tag set. */
+/**
+ * Merge a form submission with its subcategory defaults into a full tag set.
+ *
+ * Keys the form left undefined are dropped before merging. Spreading them
+ * would copy `undefined` over the default, and the schema would then fill in
+ * ITS default -- a sweater with no details entered would lose "knit" and
+ * become materials [].
+ */
 export function applyDefaults(form: GarmentForm, defaults: SubcategoryDefaults): GarmentTags {
-  return GarmentTagsSchema.parse({ ...defaults, ...form });
+  const given = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== undefined));
+  return GarmentTagsSchema.parse({ ...defaults, ...given });
 }

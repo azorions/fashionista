@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import taxonomySql from '../../../supabase/migrations/0001_taxonomy.sql?raw';
 
@@ -6,6 +7,7 @@ import {
   applyDefaults,
   BODY_ZONES,
   CATEGORIES,
+  type Category,
   GarmentFormSchema,
   GarmentTagsSchema,
   LAYER_ROLES,
@@ -18,7 +20,14 @@ import {
   SILHOUETTES,
   STYLE_TAGS,
   type SubcategoryDefaults,
+  taggerSchema,
+  taggerToForm,
 } from './schema';
+
+/** (code, category, body zone, layer role) of every garment_subcategory seed row. */
+const SEED = [
+  ...taxonomySql.matchAll(/^\s*\('([a-z0-9_]+)',\s*'[^']*',\s*'([a-z_]+)',\s*'([a-z_]+)',\s*'([a-z_]+)'/gm),
+];
 
 function sqlEnum(name: string): string[] {
   const m = taxonomySql.match(new RegExp(`create type ${name} as enum \\(([^)]*)\\)`, 'i'));
@@ -55,9 +64,8 @@ describe('taxonomy matches the SQL migration', () => {
   });
 
   it('every subcategory seed uses a known category and layer role', () => {
-    const rows = [...taxonomySql.matchAll(/^\s*\('([a-z0-9_]+)',\s*'[^']*',\s*'([a-z_]+)',\s*'([a-z_]+)',\s*'([a-z_]+)'/gm)];
-    expect(rows.length).toBeGreaterThan(30); // seeds actually parsed
-    for (const [, code, category, bodyZone, layerRole] of rows) {
+    expect(SEED.length).toBeGreaterThan(30); // seeds actually parsed
+    for (const [, code, category, bodyZone, layerRole] of SEED) {
       expect(CATEGORIES, `${code} category`).toContain(category);
       expect(BODY_ZONES, `${code} body zone`).toContain(bodyZone);
       expect(LAYER_ROLES, `${code} layer role`).toContain(layerRole);
@@ -143,24 +151,25 @@ describe('the capture form requires two fields', () => {
   });
 });
 
-describe('applyDefaults', () => {
-  const defaults: SubcategoryDefaults = {
-    bodyZone: 'legs',
-    layerRole: 'bottom',
-    altLayerRoles: [],
-    warmth: 3,
-    breathability: 2,
-    bulk: 3,
-    formality: 2,
-    silhouette: 'straight',
-    length: 'full',
-    rise: 'mid',
-    materials: ['denim'],
-    pattern: 'solid',
-    patternScale: 'none',
-    sheen: 'matte',
-  };
+/** Jeans, as the seed has them. */
+const defaults: SubcategoryDefaults = {
+  bodyZone: 'legs',
+  layerRole: 'bottom',
+  altLayerRoles: [],
+  warmth: 3,
+  breathability: 2,
+  bulk: 3,
+  formality: 2,
+  silhouette: 'straight',
+  length: 'full',
+  rise: 'mid',
+  materials: ['denim'],
+  pattern: 'solid',
+  patternScale: 'none',
+  sheen: 'matte',
+};
 
+describe('applyDefaults', () => {
   it('keeps the subcategory defaults when no details were entered', () => {
     // The bug this guards: spreading {materials: undefined} over the defaults,
     // then letting the schema default it to [] -- jeans would stop being denim.
@@ -210,5 +219,94 @@ describe('applyDefaults', () => {
     expect(() =>
       applyDefaults({ category: 'top', subcategory: 'tee' }, { ...defaults, warmth: 9 })
     ).toThrow();
+  });
+});
+
+/** Every node of a rendered JSON Schema, depth first. */
+const nodes = (s: unknown): Record<string, unknown>[] =>
+  s && typeof s === 'object'
+    ? [...(Array.isArray(s) ? [] : [s as Record<string, unknown>]), ...Object.values(s).flatMap(nodes)]
+    : [];
+
+/**
+ * The tagger's schema becomes Claude's structured-output format, which
+ * supports only part of JSON Schema. A bound or a default outside that part
+ * is refused or silently stripped, and a garment fails to tag over it. The
+ * answer itself has to land exactly as the capture form would have sent it.
+ */
+describe('the AI tagger', () => {
+  const kinds = SEED.map(([, code, category]) => ({ code, category: category as Category }));
+  const schema = taggerSchema(kinds);
+  const answer = {
+    subcategory: 'sweater',
+    pattern: 'stripe',
+    patternScale: 'large',
+    materials: ['wool'],
+    sheen: 'matte',
+    styleTags: ['cozy'],
+  };
+
+  it('accepts every seeded subcategory, unknown included, and nothing invented', () => {
+    expect(kinds.map((k) => k.code)).toContain('unknown');
+    for (const { code } of kinds) {
+      expect(schema.safeParse({ ...answer, subcategory: code }).success, code).toBe(true);
+    }
+    expect(schema.safeParse({ ...answer, subcategory: 'shrug' }).success).toBe(false);
+    expect(() => taggerToForm({ ...answer, styleTags: ['goth'] }, kinds)).toThrow();
+  });
+
+  it('renders only JSON Schema that structured outputs support', () => {
+    const banned = [
+      'minimum',
+      'maximum',
+      'exclusiveMinimum',
+      'exclusiveMaximum',
+      'multipleOf',
+      'minLength',
+      'maxLength',
+      'minItems',
+      'maxItems',
+      'default',
+    ];
+    const all = nodes(z.toJSONSchema(schema));
+    const objects = all.filter((n) => n.type === 'object');
+    expect(objects.length).toBeGreaterThan(0);
+    for (const o of objects) {
+      expect(o.additionalProperties).toBe(false);
+      expect(o.required).toEqual(Object.keys(o.properties as object));
+    }
+    for (const n of all) for (const k of banned) expect(n, k).not.toHaveProperty(k);
+  });
+
+  it('answers as the capture form would have', () => {
+    const form = taggerToForm(
+      {
+        ...answer,
+        pattern: 'solid',
+        materials: ['wool', 'wool'],
+        styleTags: ['cozy', 'cozy'],
+      },
+      kinds
+    );
+    expect(form).toEqual({
+      category: 'top', // read off the sweater, never asked
+      subcategory: 'sweater',
+      pattern: 'solid',
+      patternScale: 'none',
+      materials: ['wool'],
+      sheen: 'matte',
+      styleTags: [{ tag: 'cozy', weight: 1 }],
+    });
+  });
+
+  it("becomes a whole garment through applyDefaults, keeping the kind's materials if it names none", () => {
+    const g = applyDefaults(
+      taggerToForm({ ...answer, subcategory: 'jeans', materials: [] }, kinds),
+      defaults
+    );
+    expect(g.category).toBe('bottom');
+    expect(g.materials).toEqual(['denim']);
+    expect(g.warmth).toBe(3);
+    expect(g.pattern).toBe('stripe');
   });
 });

@@ -5,9 +5,10 @@ import { z } from 'zod';
  *
  * This file is the single source of truth for what a garment IS. The tag form
  * reads these lists to build its pickers, the styling engine scores against
- * these fields, and (in M3) the AI tagger's structured output validates against
- * this same schema. The SQL enums in 0001_taxonomy.sql mirror these arrays and
- * are kept honest by schema.test.ts, which parses the migration and diffs it.
+ * these fields, and the M3 AI tagger's structured output (taggerSchema, at the
+ * bottom) is built from these same lists. The SQL enums in 0001_taxonomy.sql
+ * mirror these arrays and are kept honest by schema.test.ts, which parses the
+ * migration and diffs it.
  *
  * Scope note: every field here is one the M2 vibe engine actually reads.
  * Deliberately absent — water_resistant, wind_block and season, because the
@@ -231,4 +232,76 @@ export type SubcategoryDefaults = Pick<
 export function applyDefaults(form: GarmentForm, defaults: SubcategoryDefaults): GarmentTags {
   const given = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== undefined));
   return GarmentTagsSchema.parse({ ...defaults, ...given });
+}
+
+/* ------------------------------------------------------------------ *
+ * The AI tagger's answer (M3).
+ * ------------------------------------------------------------------ */
+
+/** Any garment_subcategory row fits. Not SubcategoryRow: row.ts imports this file. */
+type Kind = { code: string; category: Category };
+
+/**
+ * What the model is allowed to say about a garment, and nothing more.
+ *
+ * Exactly what a person sets on the capture form: the kind, plus the "More
+ * details" overrides. Category is not asked for -- it is read off the chosen
+ * subcategory, so the two cannot disagree. Warmth, formality and the other
+ * ordinals are not asked for either: every save fills them from the
+ * subcategory, so a guess would be overwritten the first time anyone
+ * confirmed the garment.
+ *
+ * Built from the subcategory rows at call time, not a TS mirror of them --
+ * subcategory is a table precisely so that adding one is an INSERT.
+ *
+ * Shaped for Claude structured outputs, which support only part of JSON
+ * Schema: every field required, no .default(), no min/max or length bounds.
+ * Send z.toJSONSchema(taggerSchema(rows)) as the format directly. The SDK's
+ * zodOutputFormat folds `enum` into the description text, so the subcategory
+ * list would no longer be enforced. schema.test.ts renders the schema and
+ * fails if a bound or a default creeps back. taggerToForm's parse is the
+ * real gate either way.
+ */
+export function taggerSchema(kinds: readonly Kind[]) {
+  return z.object({
+    subcategory: z
+      .enum(kinds.map((k) => k.code) as [string, ...string[]])
+      .describe("'unknown' when it is not clearly one of the others"),
+    pattern: z.enum(PATTERNS),
+    // The form's scales: a solid gets 'none' below, and 'micro' scores as 'small'.
+    patternScale: z.enum(PATTERN_SCALES).exclude(['none', 'micro']),
+    materials: z.array(z.enum(MATERIALS)),
+    sheen: z.enum(SHEENS),
+    styleTags: z.array(z.enum(STYLE_TAGS)),
+  });
+}
+
+/**
+ * The model's answer, as if a person had submitted the capture form, so it
+ * goes through applyDefaults and saveTags like any other answer. To prefill
+ * the tag screen, pass applyDefaults(taggerToForm(raw, rows), defaults) as
+ * `initial` -- the form turns a missing materials list into [].
+ *
+ * - a solid gets scale 'none', as the form gives it;
+ * - no materials means "the subcategory's", not "made of nothing" -- []
+ *   would override the default and a sweater would stop being knit;
+ * - duplicates collapse, because item_style_tags allows one row per tag.
+ *
+ * Throws if the answer does not parse; the caller keeps 'unknown', so a bad
+ * answer never blocks a capture.
+ */
+export function taggerToForm(raw: unknown, kinds: readonly Kind[]): GarmentForm {
+  const out = taggerSchema(kinds).parse(raw);
+  const materials = [...new Set(out.materials)];
+  return {
+    category: kinds.find((k) => k.code === out.subcategory)!.category,
+    subcategory: out.subcategory,
+    pattern: out.pattern,
+    patternScale: out.pattern === 'solid' ? 'none' : out.patternScale,
+    materials: materials.length ? materials : undefined,
+    sheen: out.sheen,
+    // ponytail: weight 1 for every tag, as the form sends -- set_style_tags
+    // stores codes only. Add a strength scale with a weighted write path.
+    styleTags: [...new Set(out.styleTags)].map((tag) => ({ tag, weight: 1 })),
+  };
 }

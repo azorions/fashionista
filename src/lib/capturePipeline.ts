@@ -2,6 +2,7 @@ import { FunctionsHttpError } from '@supabase/supabase-js';
 
 import { supabase } from './supabase';
 import { analyzeTile, prepareForUpload } from './imageIo';
+import { invokeFailure } from '@/domain/capture/pipeline';
 import { rowToDefaults, tagsToRow, type SubcategoryRow } from '@/domain/garment/row';
 import { applyDefaults, type GarmentForm } from '@/domain/tagging/schema';
 import { scoreMaskQuality } from '@/domain/quality/score';
@@ -123,11 +124,15 @@ async function invoke(imageId: string) {
   const { error } = await supabase.functions.invoke('process-garment', { body: { imageId } });
   if (!error) return;
 
-  // FunctionsHttpError means the function RAN and returned non-2xx -- and it
-  // has already written its real failure reason onto the row, which the poll
-  // surfaces. Throwing here used to replace that reason with supabase-js's
-  // generic "Edge Function returned a non-2xx status code".
-  if (error instanceof FunctionsHttpError) return;
+  // An HTTP error may or may not have come from our code. If it did, its reason
+  // is on the row and the poll surfaces it. If not, the row will never change.
+  if (error instanceof FunctionsHttpError) {
+    const response = error.context as Response;
+    const body = await response.json().catch(() => null);
+    const failure = invokeFailure(response.status, body);
+    if (failure === null) return;
+    throw new Error(failure);
+  }
 
   // A relay or fetch error means it never ran, so nothing will ever update
   // the row. Fail now rather than poll for 90 seconds.

@@ -2,13 +2,15 @@
  * Background removal, behind a provider adapter.
  *
  * The adapter is the whole point: "free" and "paid" are the same code path and
- * differ by one environment variable. Milestone 1 runs on Replicate's signup
- * credits; swapping to fal.ai when you want the best edge quality on knit
+ * differ by one environment variable. Milestone 1 runs on Replicate; swapping
+ * to fal.ai when you want the best edge quality on knit
  * fuzz, lace and fringe is `CUTOUT_PROVIDER=fal`.
  *
  * This runs server-side for one reason only: the API token must not ship in
  * the app bundle, which anyone can unzip.
  */
+
+import { CutoutError, predictionOutput } from './prediction.ts';
 
 export type Provider = 'replicate' | 'fal';
 
@@ -19,7 +21,7 @@ export interface CutoutResult {
   ms: number;
 }
 
-export class CutoutError extends Error {}
+export { CutoutError };
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
   const r = await fetch(url);
@@ -27,29 +29,37 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await r.arrayBuffer());
 }
 
-/** ~$0.0004/run, and new accounts get signup credits. The milestone 1 default. */
+/** ~$0.0004/run. The milestone 1 default. */
 async function viaReplicate(imageUrl: string): Promise<Uint8Array> {
   const token = Deno.env.get('REPLICATE_API_TOKEN');
   if (!token) throw new CutoutError('REPLICATE_API_TOKEN is not set');
+  const auth = { Authorization: `Bearer ${token}` };
 
   const r = await fetch('https://api.replicate.com/v1/models/851-labs/background-remover/predictions', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...auth,
       'Content-Type': 'application/json',
-      // Blocks until done instead of making us poll a prediction id.
+      // Usually returns the finished result. See predictionOutput for when not.
       Prefer: 'wait',
     },
     body: JSON.stringify({ input: { image: imageUrl, format: 'png' } }),
   });
 
   if (!r.ok) throw new CutoutError(`replicate ${r.status}: ${await r.text()}`);
-  const body = await r.json();
-  if (body.error) throw new CutoutError(`replicate: ${body.error}`);
 
-  const out = Array.isArray(body.output) ? body.output[0] : body.output;
-  if (typeof out !== 'string') throw new CutoutError('replicate returned no image url');
-  return fetchBytes(out);
+  const file = await predictionOutput(
+    await r.json(),
+    async (url) => {
+      const poll = await fetch(url, { headers: auth });
+      if (!poll.ok) throw new CutoutError(`replicate ${poll.status}: ${await poll.text()}`);
+      return poll.json();
+    },
+    // 60s of wait mode plus this leaves time to finish the tile inside the free
+    // plan's 150s, and to report a failure rather than be killed mid-request.
+    { timeoutMs: 40_000, intervalMs: 1_500 },
+  );
+  return fetchBytes(file);
 }
 
 /**

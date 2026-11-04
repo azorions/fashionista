@@ -2,35 +2,30 @@
  * Deterministic post-processing. No AI, no per-image cost.
  *
  * This is what turns "a cutout" into "a tile that looks like part of a set":
- * fixed colour correction, then a fixed canvas.
+ * every tile has identical dimensions, identical margin, identical centre. The
+ * silhouette inside differs; the box never does.
  *
- * sharp is not an option here: it binds native libvips and Deno cannot load
- * it. magick-wasm is Supabase's own documented recommendation for image work
- * in Edge Functions.
+ * sharp is not an option here: it binds native libvips, and Edge Functions
+ * cannot load it. magick-wasm was the first choice and is out for two reasons.
+ * It ships two 15 MB wasm builds, about 10 MB compressed, against a 5 MB limit
+ * when deploying without Docker. And it compiles all of that on a cold start,
+ * inside a 2s CPU budget for the whole request. These three modules are about
+ * 1.5 MB between them. The geometry between them is pixels.ts.
  *
- * Every call below was checked against @imagemagick/magick-wasm 0.0.43 -- its
- * type definitions for the image operators, and its shipped implementation for
- * initialisation, because the types alone were not enough (see init()).
- *
- * STILL UNVERIFIED: that this runs at all. The WASM build is a subset of full
- * ImageMagick and nothing here has executed. Confirm a 1024x1024 RGBA decode
- * plus two WebP-with-alpha encodes fits the Edge Function memory limit. If it
- * is slow, move the call into a Background Task so the HTTP response returns
- * immediately. If magick-wasm cannot do it, a ~100-line Node+sharp service is
- * the escape hatch.
+ * ponytail: no colour correction. A level stretch was designed here and cut
+ * before it ever ran. It maps each garment's darkest and brightest pixels to 0
+ * and 255, which only works if the garment contains true black and true white:
+ * black jeans would come out grey and a navy jumper bright blue, and the Style
+ * tab scores outfits on the colours read from this tile. Without a reference
+ * white in a cutout, the camera's own white balance is the best estimate we
+ * have. Revisit if real photos come out with a visible cast.
  */
 
-import {
-  AlphaAction,
-  Channels,
-  Gravity,
-  ImageMagick,
-  initializeImageMagick,
-  MagickColors,
-  MagickFormat,
-  MagickGeometry,
-  Percentage,
-} from 'npm:@imagemagick/magick-wasm@0.0.43';
+import { decode, init as initPng } from 'npm:@jsquash/png@3.1.1/decode.js';
+import resize, { initResize } from 'npm:@jsquash/resize@2.1.1';
+import encode, { init as initWebp } from 'npm:@jsquash/webp@1.5.0/encode.js';
+
+import { alphaBounds, centerOnCanvas, crop, fitSize, type Rgba } from './pixels.ts';
 
 /** Canonical tile edge. Every tile in the grid is exactly this. */
 export const TILE = 1024;
@@ -38,28 +33,31 @@ export const TILE = 1024;
 export const FIT = 0.84;
 export const THUMB = 256;
 
-/** Must match the version in the import above; imports cannot use a variable. */
-const PKG = 'npm:@imagemagick/magick-wasm@0.0.43';
+/** Read a wasm file out of an npm package, relative to one of its modules. */
+async function compile(moduleSpecifier: string, wasmPath: string): Promise<WebAssembly.Module> {
+  const bytes = await Deno.readFile(new URL(wasmPath, import.meta.resolve(moduleSpecifier)));
+  return WebAssembly.compile(bytes);
+}
 
 let ready: Promise<void> | null = null;
 
 /**
- * Load the wasm as BYTES, never as a URL.
+ * Hand each library its wasm as a compiled module.
  *
- * initializeImageMagick's type accepts a URL, but its implementation throws
- * "Only http/https protocol is supported" for any other scheme -- and
- * import.meta.resolve on an npm: specifier yields file://. An earlier version
- * of this file passed that URL and so failed every single capture, having
- * trusted the type signature over the code behind it.
+ * Left to themselves they fetch() the file relative to import.meta.url, which
+ * is not something to rely on inside a bundled function.
  *
- * This is Supabase's documented pattern (resolve the package, readFile the
- * wasm relative to it), with the path corrected for 0.0.43, which moved the
- * default build into x86/.
+ * The webp file must be the SIMD build: init() picks its JS glue by feature
+ * detection, and V8 has SIMD, so the glue it picks expects this binary.
  */
 function init(): Promise<void> {
   ready ??= (async () => {
-    const wasm = await Deno.readFile(new URL('x86/magick.wasm', import.meta.resolve(PKG)));
-    await initializeImageMagick(wasm);
+    const [png, scaler, webp] = await Promise.all([
+      compile('npm:@jsquash/png@3.1.1/decode.js', './codec/pkg/squoosh_png_bg.wasm'),
+      compile('npm:@jsquash/resize@2.1.1', './lib/resize/pkg/squoosh_resize_bg.wasm'),
+      compile('npm:@jsquash/webp@1.5.0/encode.js', './codec/enc/webp_enc_simd.wasm'),
+    ]);
+    await Promise.all([initPng(png), initResize(scaler), initWebp(webp)]);
   })().catch((e) => {
     // Memoising a REJECTED promise would poison the isolate: every later
     // request would fail instantly with the same error. Allow a retry.
@@ -69,62 +67,57 @@ function init(): Promise<void> {
   return ready;
 }
 
+/**
+ * TypeScript's ImageData allows float pixels too, but these libraries only ever
+ * produce and read 8-bit, which is what Rgba says.
+ */
+const toRgba = (img: ImageData) => img as unknown as Rgba;
+
+/** Premultiplied, so edges do not pick up the colour behind the garment. */
+const scaled = async (img: Rgba, width: number, height: number) =>
+  toRgba(await resize(img as ImageData, { width, height, premultiply: true }));
+
+const webp = async (img: Rgba, quality: number) =>
+  new Uint8Array(await encode(img as ImageData, { quality }));
+
 export interface Tiles {
   tile: Uint8Array;
   thumb: Uint8Array;
 }
 
 export async function postprocess(cutoutPng: Uint8Array): Promise<Tiles> {
+  const marks: string[] = [];
+  let last = performance.now();
+  const mark = (name: string) => {
+    const now = performance.now();
+    marks.push(`${name} ${Math.round(now - last)}ms`);
+    last = now;
+  };
+
   await init();
+  mark('init');
 
-  let tile: Uint8Array | null = null;
-  let thumb: Uint8Array | null = null;
+  const decoded = toRgba(await decode(cutoutPng.buffer as ArrayBuffer));
+  mark(`decode ${decoded.width}x${decoded.height}`);
 
-  ImageMagick.read(cutoutPng, (img) => {
-    // 1. Per-channel level stretch == white-patch white balance. This is what
-    //    kills the warm indoor-bulb cast that makes every tile look yellow,
-    //    and it lifts an underexposed shot at the same time.
-    //
-    //    NOT gray-world (scaling channels toward a common mean): a single
-    //    strongly coloured garment filling the frame drags the grey point and
-    //    comes out desaturated -- the exact failure a wardrobe app must not
-    //    have. Restricted to RGB so alpha is never touched.
-    img.autoLevel(Channels.RGB);
+  const box = alphaBounds(decoded);
+  if (!box) throw new Error('the cutout found no garment in this photo');
 
-    // A separate sigmoidal shadow-lift pass was designed here and cut. The
-    // only valid overloads are (contrast) and (contrast, midpoint), and
-    // whether a negative contrast flattens or inverts the curve in this build
-    // is not something to guess at in code that has never run. autoLevel
-    // already covers the stated goal. Revisit during the spike, with real
-    // photos to compare against.
+  const garment = crop(decoded, box);
+  const size = fitSize(box.width, box.height, Math.round(TILE * FIT));
+  mark('trim');
 
-    // 2. Trim to the garment using the alpha channel. 2% fuzz so a stray
-    //    semi-transparent speck cannot defeat the trim.
-    img.alpha(AlphaAction.Set);
-    img.trim(new Percentage(2));
-    img.resetPage();
+  const canvas = centerOnCanvas(await scaled(garment, size.width, size.height), TILE);
+  mark('fit');
 
-    // 3. Fit to FIT of the box, then centre on a square transparent canvas.
-    //    THIS is what makes a grid of mediocre cutouts read as a set: every
-    //    tile has identical dimensions, identical margin, identical centre.
-    //    The silhouette inside differs; the box never does.
-    const inner = Math.round(TILE * FIT);
-    img.resize(new MagickGeometry(`${inner}x${inner}`));
-    img.backgroundColor = MagickColors.Transparent;
-    img.extent(new MagickGeometry(`${TILE}x${TILE}`), Gravity.Center);
+  const tile = await webp(canvas, 92);
+  mark('tile');
 
-    img.quality = 92;
-    img.write(MagickFormat.WebP, (d) => {
-      tile = new Uint8Array(d); // copy: the buffer is reused after the callback
-    });
+  const thumb = await webp(await scaled(canvas, THUMB, THUMB), 82);
+  mark('thumb');
 
-    img.resize(new MagickGeometry(`${THUMB}x${THUMB}`));
-    img.quality = 82;
-    img.write(MagickFormat.WebP, (d) => {
-      thumb = new Uint8Array(d);
-    });
-  });
-
-  if (!tile || !thumb) throw new Error('postprocess produced no output');
+  // Wall clock, but all of this is CPU-bound, so it is close to what counts
+  // against the 2s limit. This line is how an overrun gets diagnosed.
+  console.log(`postprocess: ${marks.join(', ')}`);
   return { tile, thumb };
 }

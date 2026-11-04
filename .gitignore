@@ -45,3 +45,6 @@ example
 # Claude Code local config
 CLAUDE.md
 .claude/
+
+# Supabase CLI state: project ref, pooler URL, version checks
+supabase/.temp/

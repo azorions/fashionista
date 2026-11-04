@@ -1,5 +1,6 @@
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 
+import { uploadResize } from '@/domain/capture/pipeline';
 import { extractPalette, type Swatch } from '@/domain/color/palette';
 import { channelMeans, exposure, laplacianVariance, scoreMask, toGray } from '@/domain/quality/metrics';
 import type { MaskMetrics, StillMetrics } from '@/domain/quality/types';
@@ -119,7 +120,9 @@ export async function analyzeTile(tileUri: string): Promise<TileAnalysis> {
 
 /** Shrink a capture before upload. Long edge 2048 keeps reprocessing viable. */
 export async function prepareForUpload(uri: string): Promise<{ uri: string }> {
-  const rendered = await ImageManipulator.manipulate(uri).resize({ width: 2048 }).renderAsync();
+  const full = await ImageManipulator.manipulate(uri).renderAsync();
+  const size = uploadResize(full.width, full.height);
+  const rendered = size ? await ImageManipulator.manipulate(full).resize(size).renderAsync() : full;
   const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.85 });
   return { uri: saved.uri };
 }

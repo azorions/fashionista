@@ -113,7 +113,10 @@ Deno.serve(async (req) => {
     if (signErr || !signed) return await fail(`could not sign source: ${signErr?.message}`);
 
     const { png, provider, ms } = await cutout(signed.signedUrl);
+
+    const postStart = performance.now();
     const { tile, thumb } = await postprocess(png);
+    const postMs = Math.round(performance.now() - postStart);
 
     const put = (name: string, bytes: Uint8Array) =>
       admin.storage.from('wardrobe').upload(`${dir}/${name}`, bytes, {
@@ -135,7 +138,7 @@ Deno.serve(async (req) => {
       .update({ status: 'ready', tile_path, thumb_path, provider, error: null })
       .eq('id', row.id);
 
-    return json({ status: 'ready', tile_path, thumb_path, provider, ms });
+    return json({ status: 'ready', tile_path, thumb_path, provider, ms, postMs });
   } catch (e) {
     const msg = e instanceof CutoutError ? `cutout: ${e.message}` : String(e);
     return await fail(msg);
